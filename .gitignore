@@ -1,0 +1,92 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dev-debug.log
+
+# Dependency directories
+node_modules/
+
+# Environment variables
+.env
+
+# Editor directories and files
+.idea
+.vscode
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS specific
+.DS_Store
+
+# Task files
+# tasks.json
+# tasks/ 
+
+# ROS2 workspace build directories
+cyclonedds_ws/build/
+cyclonedds_ws/install/
+cyclonedds_ws/log/
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Pytest cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# TaskMaster AI generated content (optional)
+.taskmaster/generated/
+.taskmaster/reports/task-complexity-report*.json
+
+# Temporary files and downloads
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Large binary files and datasets
+*.tar.gz
+*.zip
+*.deb
+*.pkg
+
+# IDE specific files
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# Robot logs and data
+logs/
+*.log
+
+# Third-party dependencies and builds (large directories)
+cyclonedds/
+unitree_sdk2_python/
+cyclonedds_ws/ 

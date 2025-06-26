@@ -1,0 +1,429 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+---
+description: MCP工具协同开发规则 - TaskMaster + Cursor最佳实践
+globs: **/*
+alwaysApply: true
+---
+
+# MCP工具协同开发规则
+
+## 🎯 核心原则
+
+- **双层责任**: TaskMaster管理策略，Cursor处理执行
+- **状态同步**: 每个阶段完成后必须同步状态到相应工具
+- **记忆驱动**: 充分利用TaskMaster任务记录和Claude项目记忆
+- **研究优先**: 优先使用TaskMaster研究功能获取最新信息
+
+## 🏗️ 双层架构责任分工
+
+### Layer 1: 战略规划层 (TaskMaster)
+```
+职责范围:
+- 项目全局视图管理和任务优先级排序
+- 依赖关系维护和进度跟踪报告
+- 研究驱动的决策支持和最新技术调研
+- 复杂任务分解和子任务管理
+
+触发条件:
+- 开始新的开发会话
+- 完成重要里程碑
+- 遇到阻塞性问题
+- 需要重新规划优先级
+```
+
+### Layer 2: 操作执行层 (Cursor + Claude)
+```
+职责范围:
+- 代码结构深度分析和项目文件管理
+- 具体代码编写和调试测试
+- 实时问题解决和用户交互反馈
+- 最终代码质量保证和集成验证
+- 项目记忆管理和技术方案实施
+
+触发条件:
+- TaskMaster提供具体任务
+- 需要理解现有代码结构
+- 执行具体的代码编写和测试
+- 解决技术实施问题
+```
+
+## 🚀 标准工作流程
+
+### 阶段1: 任务启动 (TaskMaster主导)
+```bash
+# 必选步骤 - 任务前检查和获取任务信息
+0. pre_task_check "任务名称" → 执行系统状态、Git状态、工具可用性检查
+1. next_task → 获取当前优先任务
+2. get_task [id] → 获取任务详细信息和依赖关系
+3. research "任务相关技术最新实践" → 获取最新技术信息
+
+# 可选步骤 - 任务优化
+4. analyze_project_complexity → 如果任务复杂度未知
+5. expand_task [id] --research --force → 如果任务需要细分
+6. get_task [id] → 重新获取展开后的子任务信息
+```
+
+**命令示例**:
+```
+"检查系统状态和工具可用性"
+"TaskMaster显示下一个任务"
+"TaskMaster显示任务2的详细信息" 
+"TaskMaster研究ROS2 Foxy最新验证最佳实践"
+"TaskMaster分析任务2的复杂度"
+"TaskMaster展开任务2为子任务，使用研究模式"
+```
+
+### 阶段2: 代码分析和实施 (Cursor + Claude主导)
+```bash
+# 项目理解
+1. "搜索与[任务描述]相关的项目文件" (codebase_search)
+2. "查找[关键技术词]相关的代码模式" (grep_search)
+3. "检查Claude记忆中关于[技术领域]的记录"
+4. "分析现有代码的导入和依赖关系" (read_file + 分析)
+5. "识别需要修改的核心文件" (file_search + list_dir)
+
+# 代码实施 (集成项目管理规范)
+6. "创建脚本/配置文件时使用标准模板和时间戳"
+7. "实现[具体功能]的核心逻辑" (edit_file)
+8. "在test/目录下创建相应的测试文件" (edit_file)
+9. "运行测试验证功能正确性: python3 test/run_tests.py" (run_terminal_cmd)
+10. "执行标准清理：standard_cleanup '操作名称'"
+```
+
+**命令示例**:
+```
+"搜索与ROS2验证相关的项目文件和配置"
+"查找项目中ros2相关的代码和导入"
+"检查Claude记忆中关于ROS2 Foxy的已知配置"
+"创建scripts/setup/validate_ros2.sh验证脚本（使用标准模板）"
+"运行ROS2诊断命令验证安装状态"
+"执行任务后清理"
+```
+
+### 阶段3: 完成记录 (跨工具同步 + 项目管理)
+```bash
+# 记录解决方案
+1. "记录[关键配置/解决方案]到Claude记忆" (update_memory)
+2. "TaskMaster记录子任务实施细节: [具体描述]"
+3. "TaskMaster设置任务状态为完成"
+
+# 项目维护和准备下一步
+4. "执行post_task_check '任务名称'" → 系统清理、Git检查
+5. "TaskMaster显示下一个任务"
+6. "运行daily_cleanup.sh进行项目维护（如需要）"
+```
+
+**命令示例**:
+```
+"记录ROS2 Foxy验证配置和诊断方法到Claude记忆"
+"TaskMaster记录子任务1.2实施细节: 成功验证ROS2 Foxy安装并确认兼容性"
+"TaskMaster设置子任务1.2状态为完成"
+"执行任务后检查和清理"
+"TaskMaster显示下一个任务"
+```
+
+## ⚠️ 关键约束和最佳实践
+
+### 项目管理集成约束
+```
+✅ 每个操作前后的标准流程:
+- 操作前: 检查系统状态、确认时间、验证工具可用性
+- 文件创建: 使用标准模板、添加时间戳和生成信息
+- 脚本权限: 自动设置可执行权限 (chmod +x)
+- 操作后: 执行清理、记录日志、检查Git状态
+
+✅ 时间处理标准:
+- 使用 $(date '+%Y-%m-%d %H:%M:%S') 格式记录操作时间
+- 文件命名使用 $(date '+%Y%m%d_%H%M%S') 格式
+- 日志文件按月组织: logs/$(date '+%Y%m')/
+
+✅ 错误处理规范:
+- 所有脚本包含错误处理机制
+- 失败时自动记录详细信息到 logs/errors/
+- 执行 cleanup_on_failure 函数清理失败文件
+```
+
+### TaskMaster使用约束
+```
+✅ 正确用法:
+- 任务管理: next_task, get_task, set_task_status
+- 进度跟踪: update_subtask, update_task
+- 研究分析: research (获取最新技术信息)
+- 任务分解: expand_task, analyze_project_complexity
+
+❌ 避免用法:
+- 不要用于具体代码编写
+- 不要用于文件系统操作
+- 不要重复获取相同任务信息
+```
+
+### Cursor + Claude使用约束
+```
+✅ 正确用法:
+- 代码编写: 具体实现和细节完善
+- 文件操作: 搜索、读取、编辑项目文件
+- 调试测试: 运行测试和错误修复
+- 项目分析: 理解代码结构和依赖关系
+- 记忆管理: 存储技术方案和配置信息
+- 项目维护: 执行清理、状态检查、日志管理
+
+❌ 避免用法:
+- 不要重复TaskMaster已完成的任务分析
+- 不要直接操作TaskMaster任务状态
+- 避免跳过标准工作流程
+- 不要忽略项目管理规范
+```
+
+## 🔄 错误恢复模式
+
+### 当TaskMaster任务不清晰时
+```bash
+1. "TaskMaster研究[任务相关技术]获取背景信息"
+2. "TaskMaster展开任务[id]分解复杂任务"
+3. "TaskMaster更新任务[id]描述: [新的理解]"
+4. 重新开始标准流程
+```
+
+### 当代码实施遇到问题时
+```bash
+1. "检查项目记忆中的相关记录"
+2. "搜索项目中的类似解决方案"
+3. "TaskMaster研究最新解决方案"
+4. "记录错误信息到失败日志"
+5. "执行cleanup_on_failure清理失败文件"
+6. "更新实施方案并重新执行"
+```
+
+### 当工具间状态不一致时
+```bash
+1. 停止当前操作
+2. "检查TaskMaster当前任务状态"
+3. "检查Claude记忆最新记录"
+4. "运行系统状态检查"
+5. "手动同步各工具状态到一致点"
+6. "记录不一致原因到Claude记忆"
+7. 从一致状态重新启动流程
+```
+
+## 📊 效率优化建议
+
+### 并行操作模式
+```bash
+# 可以并行执行的操作:
+TaskMaster研究 + 项目文件分析
+TaskMaster获取任务详情 + 检查项目记忆
+```
+
+### 批量处理模式
+```bash
+# 优先使用批量操作:
+"TaskMaster获取任务1,2,3的详细信息"
+"分析src/claudia/目录下所有模块结构"
+```
+
+### 记忆复用策略
+```bash
+# 优先检查已有记忆:
+1. "检查关于[技术领域]的Claude记忆"
+2. "TaskMaster检查类似任务的历史记录"
+3. 避免重复分析相同内容
+```
+
+## 🎯 项目管理最佳实践
+
+### 脚本和配置文件创建标准
+```bash
+# ✅ 创建脚本时的标准流程
+SCRIPT_NAME="操作名称.sh"
+SCRIPT_PATH="scripts/setup/${SCRIPT_NAME}"
+TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
+
+# 备份现有文件
+if [ -f "$SCRIPT_PATH" ]; then
+    mv "$SCRIPT_PATH" "$SCRIPT_PATH.backup_${TIMESTAMP}"
+fi
+
+# 创建标准脚本头
+cat > "$SCRIPT_PATH" << 'EOF'
+#!/bin/bash
+# Generated: $(date '+%Y-%m-%d %H:%M:%S')
+# Purpose: [具体用途]
+# Platform: $(uname -m) $(lsb_release -d | cut -f2)
+
+set -e
+# 脚本内容...
+EOF
+
+chmod +x "$SCRIPT_PATH"
+```
+
+### 操作前后检查清单
+```bash
+# 每个主要操作前的检查
+pre_operation_check() {
+    echo "⏰ 当前时间: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+    echo "📁 当前目录: $(pwd)"
+    echo "💾 磁盘使用: $(df . | tail -1 | awk '{print $5}')"
+    echo "🧠 内存使用: $(free | grep Mem | awk '{printf "%.0f%%", $3/$2 * 100.0}')"
+}
+
+# 每个主要操作后的清理
+post_operation_cleanup() {
+    local operation_name="$1"
+    echo "🧹 清理 $operation_name 相关文件..."
+    find /tmp -name "claudia*" -mtime +1 -delete 2>/dev/null || true
+    find . -name "*.tmp" -delete 2>/dev/null || true
+    echo "✅ $operation_name 清理完成"
+}
+```
+
+### 日常维护流程
+```bash
+# 每日维护检查清单
+daily_maintenance() {
+    echo "🗓️  每日维护检查 - $(date '+%Y-%m-%d')"
+    
+    # 1. 运行清理脚本
+    ./scripts/maintenance/daily_cleanup.sh --quiet
+    
+    # 2. 检查磁盘空间
+    df -h . | grep -v "Filesystem"
+    
+    # 3. 检查Git状态
+    git status --porcelain || echo "不在Git仓库中"
+    
+    # 4. 检查重要服务
+    pgrep -f "ros" || echo "ROS2未运行"
+    
+    echo "✅ 日常维护完成"
+}
+```
+
+## 🎯 Claudia项目特定规则
+
+### 机器人项目工作流程
+```bash
+# 硬件相关任务流程:
+1. TaskMaster获取硬件配置任务
+2. TaskMaster研究硬件最新驱动和SDK
+3. 分析现有硬件抽象层代码
+4. 实现硬件接口和驱动封装（使用标准模板）
+5. 编写测试和验证代码
+6. 记录硬件配置到Claude记忆
+7. 执行硬件测试清理
+
+# AI组件任务流程:
+1. TaskMaster获取AI功能任务  
+2. TaskMaster研究最新AI模型和API
+3. 分析AI组件架构设计
+4. 实现模型加载和推理接口（包含错误处理）
+5. 集成AI功能到主系统
+6. 记录AI配置和优化参数
+7. 执行AI组件测试清理
+```
+
+### ROS2集成特殊处理
+```bash
+# ROS2工作空间操作规范:
+- 所有colcon build操作在cyclonedds_ws目录执行
+- 构建前检查磁盘空间（需要>2GB）
+- 构建后验证install目录完整性
+- ROS2话题和服务定义优先使用标准工具管理
+- 网络配置变更必须记录到Claude记忆
+- DDS配置使用保守设置避免内存问题
+```
+
+### 文件组织规范
+```bash
+# Claudia项目文件结构规范:
+scripts/
+├── setup/           # 环境配置脚本
+├── maintenance/     # 维护和清理脚本
+├── testing/         # 测试脚本
+└── deployment/      # 部署脚本
+
+logs/
+├── YYYYMM/         # 按月组织的日志
+├── errors/         # 错误日志
+├── maintenance/    # 维护日志
+└── timing.log      # 操作耗时记录
+
+tmp/
+├── downloads/      # 临时下载文件
+└── YYYYMMDD/      # 按日期组织的临时文件
+
+config/             # 配置文件
+docs/              # 文档文件
+```
+
+## 📋 每日开发检查清单
+
+### 开发会话开始前
+```
+□ 运行 pre_task_check 检查系统状态
+□ TaskMaster当前任务状态是否最新
+□ Claude记忆是否包含最新解决方案
+□ 工具间是否存在状态不一致
+□ 是否有未完成的子任务需要处理
+□ 磁盘空间是否充足（>10%可用）
+```
+
+### 开发会话结束后
+```
+□ 所有代码变更已提交到版本控制
+□ 重要配置和解决方案已记录到Claude记忆
+□ TaskMaster任务状态已更新
+□ 执行 post_task_check 完成清理
+□ 运行 daily_cleanup.sh 进行项目维护
+□ 下一个任务已明确并准备就绪
+□ 日志文件大小合理（<100MB总计）
+```
+
+## 🚨 紧急情况处理
+
+### 系统资源不足
+```bash
+1. 立即运行 daily_cleanup.sh --verbose
+2. 检查磁盘空间: df -h
+3. 清理ROS2构建缓存: rm -rf cyclonedds_ws/build/
+4. 清理大型日志文件: find logs/ -size +10M -delete
+5. 记录紧急清理到故障日志
+```
+
+### 任务阻塞处理
+```bash
+1. "TaskMaster研究阻塞问题的解决方案"
+2. "检查Claude记忆中的类似问题记录"
+3. "记录阻塞详情到失败日志"
+4. "TaskMaster更新任务为deferred状态"
+5. "TaskMaster获取下一个可执行任务"
+```
+
+### 工具连接中断
+```bash
+1. 检查MCP服务器状态和进程
+2. 重启有问题的MCP服务
+3. 验证工具间通信正常
+4. 从最后一致状态恢复工作
+5. 记录连接问题到维护日志
+```
+
+## 📈 成功指标
+
+### 工作流程效率指标
+- 任务完成时间缩短40%
+- 重复性错误减少60%
+- 代码质量和一致性提升
+- 开发效率改善
+
+### 工具利用率指标
+- TaskMaster: 用于所有任务管理和研究
+- Cursor + Claude: 用于所有代码实施和项目管理
+
+---
+
+**注意**: 本规则文件应定期根据项目进展和工具更新进行调整优化。
