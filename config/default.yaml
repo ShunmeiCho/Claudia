@@ -1,0 +1,134 @@
+# Claudia机器人系统默认配置
+# 配置文件版本: 1.0
+# 更新日期: 2025-01-23
+
+# 网络配置
+network:
+  robot_ip: "192.168.123.161"          # Unitree Go2机器人IP地址
+  host_ip: "192.168.123.162"           # 主机IP地址
+  dds_domain_id: 0                     # DDS域ID
+  ros2_discovery_timeout: 5.0          # ROS2发现超时时间(秒)
+
+# ROS2集成配置
+ros2:
+  # 基础配置
+  distro: "foxy"                       # ROS2发行版
+  workspace: "cyclonedds_ws"           # 工作空间目录
+  rmw_implementation: "rmw_cyclonedds_cpp"  # DDS实现
+  domain_id: 0                         # ROS域ID（与network.dds_domain_id保持一致）
+  
+  # 环境设置
+  auto_setup_environment: true         # 自动设置ROS2环境
+  source_workspace: true               # 自动源工作空间
+  verify_installation: true            # 启动时验证安装
+  
+  # 节点配置
+  default_qos_profile: "default"       # 默认QoS配置
+  executor_type: "MultiThreadedExecutor"  # 执行器类型
+  spin_in_thread: true                 # 在单独线程中运行
+  
+  # 日志配置
+  logging_level: "INFO"                # ROS2日志级别
+  enable_rosout: true                  # 启用rosout日志
+  log_to_file: false                   # 是否记录到文件
+  
+  # Unitree包配置
+  unitree_packages:
+    - "unitree_api"                    # Unitree API包
+    - "unitree_go"                     # Go2机器人包
+    - "unitree_hg"                     # 人形机器人包
+    - "unitree_ros2_example"           # 示例包
+  
+  # 话题和服务配置
+  topics:
+    # 机器人状态话题
+    sport_mode_state: "/sportmodestate"
+    low_state: "/lowstate"
+    high_state: "/highstate"
+    
+    # 控制话题
+    sport_mode_cmd: "/sportmodecmd"
+    low_cmd: "/lowcmd"
+    high_cmd: "/highcmd"
+    
+    # 传感器话题
+    lidar_scan: "/scan"
+    camera_image: "/camera/image_raw"
+    realsense_rgb: "/camera/color/image_raw"
+    realsense_depth: "/camera/depth/image_raw"
+    imu_data: "/imu"
+    
+  services:
+    # 机器人控制服务
+    sport_mode_service: "/sport_mode"
+    emergency_stop: "/emergency_stop"
+    
+  # 集成设置
+  integration:
+    enable_automatic_initialization: true  # 启用自动初始化
+    retry_on_failure: true              # 失败时重试
+    max_retry_attempts: 3                # 最大重试次数
+    retry_delay: 2.0                     # 重试延迟(秒)
+    health_check_interval: 10.0         # 健康检查间隔(秒)
+
+# 传感器配置
+sensors:
+  lidar_enabled: true                  # 4D LiDAR L1启用
+  camera_enabled: true                 # 主摄像头启用
+  realsense_enabled: true              # Intel RealSense D435i启用
+  imu_enabled: true                    # IMU传感器启用
+  force_sensor_enabled: true           # 足端力传感器启用
+  
+  # 摄像头参数
+  main_camera_resolution: [1280, 720] # 主摄像头分辨率
+  main_camera_fps: 30                  # 主摄像头帧率
+  realsense_resolution: [640, 480]     # RealSense分辨率
+  realsense_fps: 30                    # RealSense帧率
+
+# AI组件配置
+ai:
+  # LLM配置 (Qwen2.5-7B)
+  llm_model: "Qwen2.5-7B-Instruct"
+  llm_quantization: "int4"             # INT4量化以适配Jetson Orin NX
+  llm_max_tokens: 512
+  llm_temperature: 0.7
+  
+  # ASR配置 (NVIDIA Parakeet-TDT)
+  asr_model: "nvidia/parakeet-tdt_ctc-0.6b-ja"
+  asr_language: "ja"                   # 日语
+  asr_sample_rate: 16000
+  
+  # TTS配置 (Japanese SpeechT5)
+  tts_model: "esnya/japanese_speecht5_tts"
+  tts_language: "ja"                   # 日语
+  tts_speaker_id: 0
+  
+  # 唤醒词配置 (PicoVoice Porcupine)
+  wake_words: ["ねえ、くら", "くらこい"]
+  wake_word_sensitivity: 0.5
+  wake_word_timeout: 3.0
+
+# 机器人配置
+robot:
+  model: "Unitree Go2 R&D Plus"
+  control_frequency: 100               # 控制频率 (Hz)
+  max_linear_velocity: 1.5             # 最大线速度 (m/s)
+  max_angular_velocity: 1.0            # 最大角速度 (rad/s)
+  
+  # 可用预设动作
+  available_actions:
+    - "stand_up"      # 起立
+    - "sit_down"      # 坐下
+    - "hello"         # 招手
+    - "dance"         # 跳舞
+    - "stretch"       # 伸展
+    - "move_forward"  # 前进
+    - "move_backward" # 后退
+    - "turn_left"     # 左转
+    - "turn_right"    # 右转
+    - "bow"           # 鞠躬
+    - "shake_hand"    # 握手
+    - "wave"          # 挥手
+    - "nod"           # 点头
+    - "trot"          # 小跑
+    - "walk"          # 行走

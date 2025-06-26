@@ -1,0 +1,692 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Claudia机器人项目管理规则
+
+## 🎯 核心原则
+
+- **项目整洁优先**: 每次操作后立即清理临时文件和失败文件
+- **时间标准化**: 所有时间相关操作使用标准化命令和格式
+- **文件生命周期管理**: 明确文件创建、使用、归档、删除流程
+- **可追溯性**: 所有操作都有清晰的时间戳和来源记录
+
+## 📁 文件管理规范
+
+### 文件生成规则
+
+#### 1. 脚本文件生成
+```bash
+# ✅ 正确的脚本创建流程
+SCRIPT_NAME="validate_environment.sh"
+SCRIPT_PATH="scripts/setup/${SCRIPT_NAME}"
+TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
+
+# 创建脚本前检查是否存在
+if [ -f "$SCRIPT_PATH" ]; then
+    mv "$SCRIPT_PATH" "$SCRIPT_PATH.backup_${TIMESTAMP}"
+    echo "备份现有脚本: $SCRIPT_PATH.backup_${TIMESTAMP}"
+fi
+
+# 创建新脚本
+cat > "$SCRIPT_PATH" << 'EOF'
+#!/bin/bash
+# Generated: $(date '+%Y-%m-%d %H:%M:%S')
+# Purpose: [具体用途]
+EOF
+
+chmod +x "$SCRIPT_PATH"
+echo "✅ 脚本创建完成: $SCRIPT_PATH"
+```
+
+#### 2. 配置文件生成
+```bash
+# ✅ 配置文件标准格式
+CONFIG_FILE="config/claudia_config.yaml"
+mkdir -p "$(dirname "$CONFIG_FILE")"
+
+cat > "$CONFIG_FILE" << EOF
+# Claudia Robot Configuration
+# Generated: $(date '+%Y-%m-%d %H:%M:%S %Z')
+# Platform: $(uname -m) $(lsb_release -d | cut -f2)
+# Version: $(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+
+# 配置内容...
+EOF
+```
+
+#### 3. 日志文件命名
+```bash
+# ✅ 标准日志文件命名
+LOG_DIR="logs/$(date '+%Y%m')"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/$(date '+%Y%m%d_%H%M%S')_${OPERATION_NAME}.log"
+
+# 示例：logs/202406/20240626_134522_ros2_validation.log
+```
+
+### 临时文件管理
+
+#### 1. 临时文件创建
+```bash
+# ✅ 使用系统临时目录
+TEMP_DIR=$(mktemp -d -t claudia.XXXXXX)
+TEMP_FILE=$(mktemp -t claudia_operation.XXXXXX)
+
+# 自动清理函数
+cleanup_temp() {
+    [ -d "$TEMP_DIR" ] && rm -rf "$TEMP_DIR"
+    [ -f "$TEMP_FILE" ] && rm -f "$TEMP_FILE"
+    echo "🧹 临时文件已清理"
+}
+
+# 设置退出时自动清理
+trap cleanup_temp EXIT
+```
+
+#### 2. 下载文件管理
+```bash
+# ✅ 下载文件标准位置
+DOWNLOAD_DIR="tmp/downloads/$(date '+%Y%m%d')"
+mkdir -p "$DOWNLOAD_DIR"
+
+# 下载完成后验证并移动到最终位置
+download_and_verify() {
+    local url="$1"
+    local final_path="$2"
+    local temp_path="$DOWNLOAD_DIR/$(basename "$url")"
+    
+    wget "$url" -O "$temp_path"
+    
+    # 验证下载
+    if [ -f "$temp_path" ] && [ -s "$temp_path" ]; then
+        mv "$temp_path" "$final_path"
+        echo "✅ 下载完成: $final_path"
+    else
+        rm -f "$temp_path"
+        echo "❌ 下载失败: $url"
+        return 1
+    fi
+}
+```
+
+## 🧹 清理规范
+
+### 自动清理触发器
+
+#### 1. 操作完成后清理
+```bash
+# 每个主要操作后的标准清理
+standard_cleanup() {
+    local operation_name="$1"
+    echo "🧹 开始清理 $operation_name 相关文件..."
+    
+    # 清理临时文件
+    find /tmp -name "claudia*" -mtime +1 -type f -delete 2>/dev/null
+    
+    # 清理空目录
+    find tmp/ -type d -empty -delete 2>/dev/null
+    
+    # 清理失败的下载
+    find tmp/downloads/ -name "*.tmp" -delete 2>/dev/null
+    find tmp/downloads/ -size 0 -delete 2>/dev/null
+    
+    # 清理过期日志（保留最近30天）
+    find logs/ -name "*.log" -mtime +30 -delete 2>/dev/null
+    
+    echo "✅ $operation_name 清理完成"
+}
+```
+
+#### 2. 失败操作清理
+```bash
+# 操作失败时的清理
+cleanup_on_failure() {
+    local operation_name="$1"
+    local failure_reason="$2"
+    
+    echo "❌ $operation_name 失败: $failure_reason"
+    
+    # 记录失败信息
+    FAILURE_LOG="logs/failures/$(date '+%Y%m%d_%H%M%S')_${operation_name}_failure.log"
+    mkdir -p "$(dirname "$FAILURE_LOG")"
+    
+    cat > "$FAILURE_LOG" << EOF
+Operation: $operation_name
+Time: $(date '+%Y-%m-%d %H:%M:%S %Z')
+Reason: $failure_reason
+Platform: $(uname -a)
+Working Directory: $(pwd)
+Git Status: $(git status --porcelain 2>/dev/null || echo "Not a git repository")
+Disk Space: $(df -h .)
+Memory: $(free -h)
+EOF
+    
+    # 清理失败产生的文件
+    standard_cleanup "$operation_name"
+    
+    echo "🗂️ 失败信息已记录: $FAILURE_LOG"
+}
+```
+
+### 项目维护脚本
+
+#### 1. 日常清理脚本
+```bash
+# scripts/maintenance/daily_cleanup.sh
+#!/bin/bash
+set -e
+
+CLEANUP_DATE=$(date '+%Y-%m-%d %H:%M:%S')
+echo "🧹 开始日常清理 - $CLEANUP_DATE"
+
+# 清理构建临时文件
+echo "清理构建文件..."
+find . -name "*.pyc" -delete
+find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+find . -name ".pytest_cache" -type d -exec rm -rf {} + 2>/dev/null || true
+
+# 清理编辑器临时文件
+echo "清理编辑器临时文件..."
+find . -name "*~" -delete
+find . -name ".#*" -delete
+find . -name "#*#" -delete
+
+# 清理空目录
+echo "清理空目录..."
+find . -type d -empty -not -path "./.git*" -delete 2>/dev/null || true
+
+# 清理过期日志
+echo "清理过期日志..."
+find logs/ -name "*.log" -mtime +30 -delete 2>/dev/null || true
+
+# 压缩旧日志
+echo "压缩旧日志..."
+find logs/ -name "*.log" -mtime +7 -exec gzip {} \; 2>/dev/null || true
+
+echo "✅ 日常清理完成 - $(date '+%Y-%m-%d %H:%M:%S')"
+```
+
+## ⏰ 时间处理规范
+
+### 标准时间命令
+
+#### 1. 时间戳生成
+```bash
+# ✅ 标准时间戳格式
+TIMESTAMP_ISO=$(date '+%Y-%m-%dT%H:%M:%S%z')     # 2024-06-26T13:45:22+0800
+TIMESTAMP_FILE=$(date '+%Y%m%d_%H%M%S')          # 20240626_134522
+TIMESTAMP_LOG=$(date '+%Y-%m-%d %H:%M:%S %Z')    # 2024-06-26 13:45:22 CST
+TIMESTAMP_SIMPLE=$(date '+%Y%m%d')               # 20240626
+
+echo "操作时间: $TIMESTAMP_LOG"
+echo "文件后缀: $TIMESTAMP_FILE"
+```
+
+#### 2. 时间验证
+```bash
+# ✅ 验证时间相关操作
+verify_time_sensitive_operation() {
+    local start_time=$(date '+%s')
+    local operation_name="$1"
+    
+    echo "⏰ 开始 $operation_name - $(date '+%Y-%m-%d %H:%M:%S')"
+    
+    # 执行操作...
+    
+    local end_time=$(date '+%s')
+    local duration=$((end_time - start_time))
+    
+    echo "✅ 完成 $operation_name - 耗时 ${duration}秒"
+    
+    # 记录到时间日志
+    echo "$(date '+%Y-%m-%d %H:%M:%S') | $operation_name | ${duration}s" >> logs/timing.log
+}
+```
+
+#### 3. 超时处理
+```bash
+# ✅ 操作超时控制
+execute_with_timeout() {
+    local timeout_seconds="$1"
+    local operation_name="$2"
+    shift 2
+    
+    echo "⏰ 执行 $operation_name (超时: ${timeout_seconds}秒)"
+    
+    if timeout "$timeout_seconds" "$@"; then
+        echo "✅ $operation_name 在时限内完成"
+        return 0
+    else
+        echo "⏰ $operation_name 超时，执行清理..."
+        cleanup_on_failure "$operation_name" "操作超时(${timeout_seconds}秒)"
+        return 1
+    fi
+}
+```
+
+## 📊 状态监控
+
+### 系统状态检查
+```bash
+# ✅ 系统资源监控
+check_system_status() {
+    echo "🔍 系统状态检查 - $(date '+%Y-%m-%d %H:%M:%S')"
+    
+    # 磁盘空间检查
+    local disk_usage=$(df . | tail -1 | awk '{print $5}' | sed 's/%//')
+    if [ "$disk_usage" -gt 90 ]; then
+        echo "⚠️ 磁盘空间不足: ${disk_usage}%"
+        echo "开始清理..."
+        standard_cleanup "disk_space_emergency"
+    fi
+    
+    # 内存检查
+    local mem_usage=$(free | grep Mem | awk '{printf "%.0f", $3/$2 * 100.0}')
+    if [ "$mem_usage" -gt 90 ]; then
+        echo "⚠️ 内存使用率过高: ${mem_usage}%"
+    fi
+    
+    # 检查关键进程
+    if ! pgrep -f "ros" > /dev/null 2>&1; then
+        echo "ℹ️ ROS2进程未运行"
+    fi
+    
+    echo "💾 磁盘: ${disk_usage}% | 🧠 内存: ${mem_usage}%"
+}
+```
+
+### Git状态管理
+```bash
+# ✅ Git仓库状态检查
+check_git_status() {
+    if ! git rev-parse --git-dir > /dev/null 2>&1; then
+        echo "ℹ️ 不在Git仓库中"
+        return 0
+    fi
+    
+    echo "📋 Git状态检查 - $(date '+%Y-%m-%d %H:%M:%S')"
+    
+    # 检查未提交更改
+    if ! git diff --quiet; then
+        echo "⚠️ 有未提交的更改"
+        git status --porcelain
+    fi
+    
+    # 检查未跟踪文件
+    local untracked=$(git ls-files --others --exclude-standard | wc -l)
+    if [ "$untracked" -gt 0 ]; then
+        echo "ℹ️ 有 $untracked 个未跟踪文件"
+    fi
+    
+    # 显示当前分支和提交
+    echo "🌿 分支: $(git branch --show-current)"
+    echo "📝 最新提交: $(git log -1 --oneline)"
+}
+```
+
+## 🔧 实用工具函数
+
+### 错误处理
+```bash
+# ✅ 标准错误处理
+handle_error() {
+    local exit_code=$?
+    local line_number=$1
+    local command="$2"
+    
+    if [ $exit_code -ne 0 ]; then
+        echo "❌ 错误发生在第 $line_number 行: $command"
+        echo "退出码: $exit_code"
+        echo "时间: $(date '+%Y-%m-%d %H:%M:%S')"
+        
+        # 记录详细错误信息
+        ERROR_LOG="logs/errors/$(date '+%Y%m%d_%H%M%S')_error.log"
+        mkdir -p "$(dirname "$ERROR_LOG")"
+        
+        {
+            echo "Error Details:"
+            echo "Time: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+            echo "Line: $line_number"
+            echo "Command: $command"
+            echo "Exit Code: $exit_code"
+            echo "Working Directory: $(pwd)"
+            echo "Environment:"
+            env | grep -E "(ROS|CYCLONE|UNITREE)" || true
+        } > "$ERROR_LOG"
+        
+        cleanup_on_failure "unknown_operation" "命令执行失败"
+        exit $exit_code
+    fi
+}
+
+# 设置错误处理
+set -e
+trap 'handle_error $LINENO "$BASH_COMMAND"' ERR
+```
+
+### 进度显示
+```bash
+# ✅ 进度显示函数
+show_progress() {
+    local current="$1"
+    local total="$2"
+    local operation="$3"
+    
+    local percentage=$((current * 100 / total))
+    local progress_bar=""
+    local completed=$((percentage / 2))
+    
+    for ((i=1; i<=50; i++)); do
+        if [ $i -le $completed ]; then
+            progress_bar+="█"
+        else
+            progress_bar+="░"
+        fi
+    done
+    
+    printf "\r🔄 $operation: [%s] %d%% (%d/%d)" "$progress_bar" "$percentage" "$current" "$total"
+    
+    if [ "$current" -eq "$total" ]; then
+        echo ""
+        echo "✅ $operation 完成!"
+    fi
+}
+```
+
+## 📋 操作检查清单
+
+### 开始任务前检查
+```bash
+pre_task_check() {
+    local task_name="$1"
+    echo "🔍 任务前检查: $task_name"
+    
+    # 系统状态
+    check_system_status
+    
+    # Git状态
+    check_git_status
+    
+    # 确认当前目录
+    echo "📁 当前目录: $(pwd)"
+    
+    # 确认时间
+    echo "⏰ 当前时间: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+    
+    # 检查必要工具
+    local required_tools=("git" "colcon" "ros2" "python3")
+    for tool in "${required_tools[@]}"; do
+        if command -v "$tool" > /dev/null 2>&1; then
+            echo "✅ $tool 可用"
+        else
+            echo "❌ $tool 不可用"
+            return 1
+        fi
+    done
+    
+    echo "🚀 准备开始任务: $task_name"
+}
+```
+
+### 完成任务后检查
+```bash
+post_task_check() {
+    local task_name="$1"
+    echo "🔍 任务后检查: $task_name"
+    
+    # 执行清理
+    standard_cleanup "$task_name"
+    
+    # 检查系统状态
+    check_system_status
+    
+    # 提交更改建议
+    if git diff --quiet; then
+        echo "ℹ️ 没有需要提交的更改"
+    else
+        echo "💡 建议提交更改:"
+        echo "git add -A"
+        echo "git commit -m 'feat: 完成 $task_name'"
+    fi
+    
+    echo "✅ 任务完成: $task_name - $(date '+%Y-%m-%d %H:%M:%S')"
+}
+```
+
+## 🎯 项目特定规则
+
+### ROS2工作空间管理
+```bash
+# ROS2工作空间操作标准
+ros2_workspace_operation() {
+    local operation="$1"
+    local workspace_path="$2"
+    
+    echo "🤖 ROS2工作空间操作: $operation"
+    
+    # 确保在正确目录
+    cd "$workspace_path"
+    
+    # 源环境
+    source /opt/ros/foxy/setup.bash
+    
+    # 执行操作
+    case "$operation" in
+        "build")
+            colcon build --symlink-install --event-handlers console_direct+
+            ;;
+        "clean")
+            rm -rf build/ install/ log/
+            ;;
+        "test")
+            colcon test
+            ;;
+    esac
+    
+    # 验证结果
+    if [ -d "install" ]; then
+        echo "✅ 工作空间操作成功"
+        source install/setup.bash
+    else
+        echo "❌ 工作空间操作失败"
+        return 1
+    fi
+}
+```
+
+### Unitree集成规则
+```bash
+# Unitree特定操作
+unitree_operation() {
+    local operation="$1"
+    
+    # 确保环境正确
+    export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+    
+    # 源必要环境
+    source /opt/ros/foxy/setup.bash
+    source cyclonedds_ws/install/setup.bash
+    
+    echo "🐕 Unitree操作: $operation"
+    
+    # 执行操作...
+}
+```
+
+---
+
+## 📖 使用说明
+
+### 在脚本中集成规则
+```bash
+#!/bin/bash
+# 在每个脚本开头添加
+set -e
+source "$(dirname "$0")/../.cursor/rules/project_management.mdc"
+
+# 开始任务
+pre_task_check "任务名称"
+
+# 执行主要逻辑...
+
+# 结束任务
+post_task_check "任务名称"
+```
+
+### 在MCP协作中使用
+- 每次使用edit_file或run_terminal_cmd前调用相关检查函数
+- 操作完成后立即执行清理
+- 所有时间相关操作使用标准时间命令
+- 失败时调用cleanup_on_failure函数
+
+### 维护建议
+- 每日运行daily_cleanup.sh
+- 每周检查日志文件大小
+- 每月评估清理规则的有效性
+- 根据项目发展调整规则
+
+---
+
+## 🧪 测试目录管理规范
+
+### 测试文件组织
+```bash
+# Claudia项目测试结构 (NEW)
+test/
+├── __init__.py         # Python包初始化
+├── README.md           # 测试说明文档  
+├── conftest.py         # pytest配置
+├── run_tests.py        # 统一测试运行器
+├── unit/               # 单元测试
+│   ├── __init__.py
+│   └── test_*.py       # 单元测试文件
+├── integration/        # 集成测试
+│   ├── __init__.py
+│   └── test_*.py       # 集成测试文件  
+├── hardware/           # 硬件测试
+│   ├── __init__.py
+│   ├── test_unitree_connection.py  # Unitree机器人连接测试
+│   └── test_*.py       # 其他硬件测试文件
+└── utils/              # 测试工具
+    ├── __init__.py
+    └── test_helpers.py # 测试辅助函数
+```
+
+### 测试运行标准
+```bash
+# ✅ 标准测试运行方式
+# 运行所有测试
+python3 test/run_tests.py
+
+# 运行特定类型的测试
+python3 test/run_tests.py --type hardware
+python3 test/run_tests.py --type unit
+python3 test/run_tests.py --type integration
+
+# 运行单个测试文件
+python3 test/hardware/test_unitree_connection.py
+
+# 使用pytest（如果安装）
+pytest test/ -v
+pytest test/hardware/ --hardware -v
+```
+
+### 测试文件创建规范
+```bash
+# ✅ 创建新测试文件的标准流程
+create_test_file() {
+    local test_type="$1"    # unit/integration/hardware
+    local test_name="$2"    # 测试功能名称
+    local test_file="test/test_${test_name}.py"
+    
+    cat > "$test_file" << EOF
+#!/usr/bin/env python3
+"""
+${test_name} 测试
+Generated: $(date '+%Y-%m-%d %H:%M:%S')
+"""
+
+import unittest
+import sys
+from pathlib import Path
+
+# 添加项目根目录到Python路径
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from test.utils.test_helpers import setup_test_environment
+
+class Test${test_name^}(unittest.TestCase):
+    
+    def setUp(self):
+        """测试前准备"""
+        self.test_env = setup_test_environment("${test_name}")
+    
+    def test_${test_name}_basic(self):
+        """基础功能测试"""
+        # 测试逻辑
+        self.assertTrue(True)
+    
+    def tearDown(self):
+        """测试后清理"""
+        self.test_env.cleanup()
+
+if __name__ == "__main__":
+    unittest.main()
+EOF
+    
+    chmod +x "$test_file"
+    echo "✅ 测试文件创建完成: $test_file"
+}
+```
+
+### 测试日志管理
+```bash
+# ✅ 测试日志标准位置
+TEST_LOG_DIR="logs/tests/$(date '+%Y%m')"
+mkdir -p "$TEST_LOG_DIR"
+
+# 测试运行时自动记录
+run_test_with_logging() {
+    local test_file="$1"
+    local log_file="$TEST_LOG_DIR/$(date '+%Y%m%d_%H%M%S')_$(basename "$test_file" .py).log"
+    
+    echo "🧪 运行测试: $(basename "$test_file")" | tee "$log_file"
+    python3 "$test_file" 2>&1 | tee -a "$log_file"
+    
+    local exit_code=${PIPESTATUS[0]}
+    if [ $exit_code -eq 0 ]; then
+        echo "✅ 测试通过" | tee -a "$log_file"
+    else
+        echo "❌ 测试失败 (退出码: $exit_code)" | tee -a "$log_file"
+    fi
+    
+    return $exit_code
+}
+```
+
+### 测试清理规范  
+```bash
+# ✅ 测试相关清理
+cleanup_test_files() {
+    echo "🧹 清理测试相关文件..."
+    
+    # 清理pytest缓存
+    find test/ -name ".pytest_cache" -type d -exec rm -rf {} + 2>/dev/null || true
+    find test/ -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+    find test/ -name "*.pyc" -delete 2>/dev/null || true
+    
+    # 清理临时测试文件
+    find test/ -name "claudia_test_*" -type d -exec rm -rf {} + 2>/dev/null || true
+    
+    # 清理过期测试日志（保留最近7天）
+    find logs/tests/ -name "*.log" -mtime +7 -delete 2>/dev/null || true
+    
+    echo "✅ 测试文件清理完成"
+}
+```
+
+---
+
+**此规则文件应被视为项目开发的基础设施，所有代码生成和文件操作都应遵循这些规范。**

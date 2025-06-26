@@ -1,0 +1,96 @@
+[project]
+name = "claudia"
+version = "0.1.0"
+description = "Claudia智能四足机器人系统 - 基于Unitree Go2 R&D Plus平台的智能四足机器人"
+authors = [
+    {name = "Claudia Development Team", email = "dev@claudia-robot.com"}
+]
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+dependencies = [
+    # Core dependencies
+    "numpy>=1.21.0",
+    "opencv-python>=4.5.0",
+    "pillow>=8.0.0",
+    
+    # ROS2 and Unitree SDK dependencies
+    "rclpy>=3.3.0",
+    "sensor-msgs>=4.2.0",
+    "geometry-msgs>=4.2.0",
+    "std-msgs>=4.2.0",
+    
+    # AI/ML dependencies
+    "torch>=1.11.0",
+    "torchvision>=0.12.0",
+    "transformers>=4.20.0",
+    "ultralytics>=8.0.0",  # YOLOv8
+    
+    # Audio processing
+    "pyaudio>=0.2.11",
+    "librosa>=0.9.0",
+    "soundfile>=0.10.0",
+    "pvporcupine>=3.0.0",  # Wake word detection
+    
+    # Communication and networking
+    "websockets>=10.0",
+    "asyncio-mqtt>=0.11.0",
+    "pyserial>=3.5",
+    
+    # Utilities
+    "pyyaml>=5.4.0",
+    "dataclasses-json>=0.5.0",
+    "python-dotenv>=0.19.0",
+    "loguru>=0.6.0",
+    "click>=8.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=22.0.0",
+    "flake8>=4.0.0",
+    "mypy>=0.950",
+    "pre-commit>=2.17.0",
+]
+
+tensorrt = [
+    "tensorrt>=8.4.0",
+    "pycuda>=2022.1",
+]
+
+realsense = [
+    "pyrealsense2>=2.50.0",
+]
+
+[project.scripts]
+claudia = "claudia.main:main"
+claudia-setup = "claudia.scripts.setup:main"
+claudia-test = "claudia.scripts.test:main"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+include = '\.pyi?$'
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+asyncio_mode = "auto"
