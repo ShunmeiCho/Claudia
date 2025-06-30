@@ -1,0 +1,11 @@
+# Task ID: 4
+# Title: Hardware & Sensor System Validation (LiDAR, Camera, IMU, Audio)
+# Status: pending
+# Dependencies: 3
+# Priority: high
+# Description: Systematically validate the functionality of all key hardware components and sensors on the Unitree Go2 R&D Plus via the `unitree_sdk2py` interface. This includes the 4D LiDAR L1, front camera, IMU, foot-end force sensors, and audio I/O.
+# Details:
+Develop Python scripts using `unitree_sdk2py` to: 1. Access and print data streams from Unitree 4D LiDAR L1 (e.g., point cloud snippets, rotation speed). 2. Capture and display images from the front HD camera (1280x720). 3. Read and log data from the built-in IMU (accelerometer, gyroscope). 4. Read and display values from the foot-end force sensors (R&D Plus specific). 5. Test audio input from the microphone array (record a short clip) and audio output to the built-in speaker (play a test sound). Refer to `/usr/local/include/unitree/go2_idl/` for data structures like `LidarState_.hpp`, `IMUState_.hpp`, `AudioData_.hpp`.
+
+# Test Strategy:
+Confirm data reception from each sensor. LiDAR: visualize point cloud or check data rate (21600 points/s). Camera: view live feed. IMU: check for changing values during motion. Force sensors: observe value changes when pressing on feet. Audio: successfully record and playback audio. All tests via Python scripts.

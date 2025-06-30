@@ -1,0 +1,11 @@
+# Task ID: 11
+# Title: Preset Action Mapping & Execution (LLM to `unitree_sdk2py`)
+# Status: pending
+# Dependencies: 3, 10
+# Priority: high
+# Description: Create a mapping system from natural Japanese commands (interpreted by the LLM) to specific Unitree Go2 Sport API calls via `unitree_sdk2py`. Implement the logic for the LLM's output to trigger these pre-defined actions.
+# Details:
+Analyze the 27 available Go2 Sport API actions (from `sport_api.hpp`, e.g., `HELLO(1016)`, `SIT(1009)`, `STRETCH(1017)`, `DANCE1(1022)`). Develop a Python module that takes the structured output from the LLM (Task 10) and translates it into calls to the corresponding `unitree_sdk2py` functions. For example, if LLM identifies intent 'greet', map to `HELLO(1016)`. For '转圈 (turn circle)', combine `EULER(1007)` and `MOVE(1008)` or use a dance API if suitable. This replaces remote control triggers.
+
+# Test Strategy:
+Test with various Japanese commands: "お手" -> HELLO, "お座り" -> SIT, "伸展" -> STRETCH, "ダンス" -> DANCE1/2. Verify correct action execution on the robot. Ensure LLM output is correctly parsed and mapped. Test composite actions like '转圈'.

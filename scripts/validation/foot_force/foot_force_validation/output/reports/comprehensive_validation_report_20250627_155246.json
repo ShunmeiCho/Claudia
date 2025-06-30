@@ -1,0 +1,39 @@
+{
+  "report_id": "FFVR_20250627_155244",
+  "generation_time": "2025-06-27T15:52:44.919737",
+  "robot_info": {
+    "model": "Unitree Go2",
+    "serial_number": "Unknown",
+    "firmware_version": "Unknown",
+    "sensor_config": {}
+  },
+  "test_environment": {
+    "test_date": "2025-06-27",
+    "test_location": "Laboratory",
+    "operator": "Automated System",
+    "temperature": "Room Temperature",
+    "humidity": "Normal",
+    "surface_type": "Stable Platform",
+    "notes": "Automated validation testing"
+  },
+  "static_results": {},
+  "static_score": 0.0,
+  "static_passed": false,
+  "dynamic_results": {},
+  "dynamic_score": 0.0,
+  "dynamic_passed": false,
+  "overall_score": 0.0,
+  "overall_grade": "F",
+  "validation_status": "FAIL",
+  "recommendations": [
+    "静态测试未通过，建议重新校准传感器零点",
+    "检查传感器安装和连接状态",
+    "动态测试未通过，建议检查机器人步态控制",
+    "验证传感器在运动过程中的响应稳定性"
+  ],
+  "static_data_file": "",
+  "dynamic_data_file": "",
+  "visualization_files": [
+    "scripts/validation/foot_force/foot_force_validation/output/visualizations/comprehensive_dashboard_20250627_155245.png"
+  ]
+}

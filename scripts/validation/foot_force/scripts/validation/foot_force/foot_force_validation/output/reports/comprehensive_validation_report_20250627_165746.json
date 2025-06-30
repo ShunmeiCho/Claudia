@@ -1,0 +1,52 @@
+{
+  "report_id": "FFVR_20250627_165743",
+  "generation_time": "2025-06-27T16:57:43.399184",
+  "robot_info": {
+    "model": "Unitree Go2",
+    "serial_number": "Unknown",
+    "firmware_version": "Unknown",
+    "sensor_config": {
+      "sampling_rate": 500,
+      "force_threshold": 5.0,
+      "max_force_per_foot": 200.0
+    }
+  },
+  "test_environment": {
+    "test_date": "2025-06-27",
+    "test_location": "Laboratory",
+    "operator": "Automated System",
+    "temperature": "Room Temperature",
+    "humidity": "Normal",
+    "surface_type": "Stable Platform",
+    "notes": "Automated validation testing"
+  },
+  "static_results": {
+    "success": false,
+    "error": "静态测试执行失败"
+  },
+  "static_score": 0.0,
+  "static_passed": false,
+  "dynamic_results": {
+    "success": true,
+    "test_results": {
+      "slow_walk": {
+        "test_score": 0.0,
+        "duration": 0.0,
+        "total_samples": 0
+      },
+      "normal_walk": {
+        "test_score": 0.0,
+        "duration": 0.0,
+        "total_samples": 0
+      },
+      "impact_test": {
+        "test_score": 0.0,
+        "duration": 0.0,
+        "total_samples": 0
+      }
+    },
+    "average_score": 0.0,
+    "results_file": "scripts/validation/foot_force/foot_force_validation/output/dynamic_test_results_20250627_165743.json"
+  },
+  "dynamic_score": 0.0,
+  "dynamic_passed": 

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Unitree Go2 基础控制命令测试
 Generated: 2024-12-26 17:56:16

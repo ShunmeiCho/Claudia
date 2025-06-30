@@ -1,0 +1,91 @@
+{
+    "camera_config": {
+        "target_resolution": [1280, 720],
+        "fallback_resolution": [480, 1280],
+        "target_fps": 30,
+        "min_acceptable_fps": 20,
+        "camera_id": 0,
+        "network_interface": "enp2s0",
+        "timeout_seconds": 10
+    },
+    "performance_thresholds": {
+        "max_latency_ms": 100,
+        "min_fps": 20,
+        "target_fps": 30,
+        "max_frame_drop_rate": 0.05,
+        "min_capture_success_rate": 0.95
+    },
+    "image_quality_thresholds": {
+        "min_ssim": 0.8,
+        "max_color_delta_e": 5.0,
+        "min_sharpness_score": 0.7,
+        "min_contrast_ratio": 0.3,
+        "max_noise_level": 0.1
+    },
+    "lighting_conditions": {
+        "indoor_low": {
+            "description": "室内低光照",
+            "expected_brightness_range": [20, 80],
+            "test_duration_seconds": 30
+        },
+        "indoor_normal": {
+            "description": "室内正常光照",
+            "expected_brightness_range": [80, 180],
+            "test_duration_seconds": 30
+        },
+        "indoor_bright": {
+            "description": "室内强光照",
+            "expected_brightness_range": [180, 255],
+            "test_duration_seconds": 30
+        },
+        "outdoor_shade": {
+            "description": "室外阴影",
+            "expected_brightness_range": [100, 200],
+            "test_duration_seconds": 30
+        },
+        "outdoor_bright": {
+            "description": "室外强光",
+            "expected_brightness_range": [200, 255],
+            "test_duration_seconds": 30
+        }
+    },
+    "motion_blur_tests": {
+        "static": {
+            "description": "静态测试",
+            "motion_speed": 0,
+            "test_duration_seconds": 10
+        },
+        "slow_motion": {
+            "description": "慢速运动",
+            "motion_speed": 1,
+            "test_duration_seconds": 15
+        },
+        "normal_motion": {
+            "description": "正常运动",
+            "motion_speed": 2,
+            "test_duration_seconds": 15
+        },
+        "fast_motion": {
+            "description": "快速运动",
+            "motion_speed": 3,
+            "test_duration_seconds": 20
+        }
+    },
+    "test_output": {
+        "base_directory": "logs/camera_validation",
+        "report_format": "json",
+        "save_sample_images": true,
+        "max_sample_images": 20,
+        "generate_visualization": true
+    },
+    "validation_sequence": [
+        "camera_initialization",
+        "resolution_verification",
+        "basic_performance_test",
+        "image_quality_analysis",
+        "lighting_condition_tests",
+        "motion_blur_tests",
+        "stress_test",
+        "report_generation"
+    ]
+} 

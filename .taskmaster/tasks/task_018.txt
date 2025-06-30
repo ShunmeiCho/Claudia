@@ -1,0 +1,11 @@
+# Task ID: 18
+# Title: System Performance Optimization, Stability & Thermal Management
+# Status: pending
+# Dependencies: 12, 14, 17
+# Priority: medium
+# Description: Conduct comprehensive system-wide performance optimization, stability testing, and thermal management validation. This includes response latencies, accuracies, resource utilization, fault recovery, and long-duration operational stability.
+# Details:
+Profile CPU, GPU, and memory usage of all components. Optimize critical paths to meet performance targets (e.g., voice response <3s, YOLO >60FPS). Implement thermal monitoring for Jetson Orin NX (CPU/GPU temps). If overheating occurs (GPU >85°C, CPU >80°C), implement performance throttling or activate cooling fans if available. Test system stability over extended periods (target >1.5 hours continuous operation with all features active). Test fault recovery mechanisms (e.g., process crashes, sensor disconnects). Validate all performance metrics from PRD.
+
+# Test Strategy:
+Run predefined test scenarios covering all functionalities. Log performance metrics, resource usage, and temperatures. Conduct stress tests and long-duration tests. Simulate faults to verify recovery. Compare results against PRD performance targets.

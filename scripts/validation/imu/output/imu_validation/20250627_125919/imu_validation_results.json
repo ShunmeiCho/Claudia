@@ -1,0 +1,72 @@
+{
+  "test_info": {
+    "start_time": "2025-06-27T12:59:17.670458",
+    "test_version": "1.0.0",
+    "robot_model": "Unitree Go2",
+    "test_operator": "m1ng"
+  },
+  "initialization": {
+    "status": "SUCCESS",
+    "imu_specs": {
+      "sampling_rate_hz": 100,
+      "accelerometer_range": "±16g",
+      "gyroscope_range": "±2000°/s"
+    }
+  },
+  "static_test": {
+    "test_status": "ERROR",
+    "error": "'NoneType' object has no attribute 'run_static_stability_test'",
+    "recommendations": [
+      "静态测试执行失败，检查系统状态"
+    ]
+  },
+  "dynamic_test": {
+    "overall": {
+      "test_status": "ERROR",
+      "error": "'NoneType' object has no attribute 'run_dynamic_response_test'",
+      "recommendations": [
+        "动态测试执行失败，检查系统状态"
+      ]
+    }
+  },
+  "calibration_analysis": {
+    "test_status": "ERROR",
+    "error": "'NoneType' object has no attribute 'run_comprehensive_calibration_analysis'",
+    "recommendations": [
+      "校准分析执行失败，检查系统状态"
+    ]
+  },
+  "visualization_test": {
+    "test_status": "ERROR",
+    "error": "'NoneType' object has no attribute 'start_visualization'",
+    "recommendations": [
+      "可视化验证执行失败，检查依赖和环境"
+    ]
+  },
+  "overall_assessment": {
+    "status": "ERROR",
+    "test_summary": {
+      "initialization": "SUCCESS",
+      "static_stability": "ERROR",
+      "dynamic_response": "ERROR",
+      "calibration_quality": "ERROR",
+      "visualization": "ERROR"
+    },
+    "pass_rate_percent": 20.0,
+    "total_recommendations": 4,
+    "critical_issues": [
+      "可视化验证执行失败，检查依赖和环境",
+      "校准分析执行失败，检查系统状态",
+      "动态测试执行失败，检查系统状态",
+      "静态测试执行失败，检查系统状态"
+    ],
+    "recommendations": [
+      "可视化验证执行失败，检查依赖和环境",
+      "校准分析执行失败，检查系统状态",
+      "动态测试执行失败，检查系统状态",
+      "静态测试执行失败，检查系统状态"
+    ],
+    "test_completion_time": "2025-06-27T12:59:19.853100",
+    "overall_conclusion": "IMU验证部分完成，通过率20.0%。请查看详细结果和建议。"
+  }
+}

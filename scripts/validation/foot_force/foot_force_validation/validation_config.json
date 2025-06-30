@@ -1,0 +1,168 @@
+{
+  "general": {
+    "project_name": "Unitree Go2 足端力传感器验证",
+    "version": "1.0.0",
+    "description": "验证Unitree Go2机器人足端力传感器的准确性和可靠性",
+    "network_interface": "eth0",
+    "domain_id": 0
+  },
+  
+  "foot_force_config": {
+    "sampling_rate_hz": 500,
+    "force_threshold": 5.0,
+    "max_force_per_foot": 200.0,
+    "max_total_force": 800.0,
+    "contact_detection_threshold": 5.0,
+    "force_range": {
+      "min_fx": -100.0,
+      "max_fx": 100.0,
+      "min_fy": -100.0,
+      "max_fy": 100.0,
+      "min_fz": -200.0,
+      "max_fz": 200.0
+    }
+  },
+  
+  "data_collection": {
+    "default_duration": 30.0,
+    "buffer_size": 10000,
+    "quality_threshold": 0.75,
+    "min_samples_for_validation": 10,
+    "save_format": ["json", "csv"],
+    "realtime_display": true
+  },
+  
+  "static_validation": {
+    "calibration_duration": 5.0,
+    "stability_check_duration": 10.0,
+    "force_accuracy_threshold": 0.05,
+    "zero_force_threshold": 2.0,
+    "balance_threshold": 0.1,
+    "test_weights": [0, 10, 20, 50, 100],
+    "acceptable_error_percentage": 5.0
+  },
+  
+  "dynamic_validation": {
+    "step_detection_threshold": 15.0,
+    "gait_analysis_duration": 60.0,
+    "peak_force_threshold": 150.0,
+    "contact_time_min": 0.1,
+    "contact_time_max": 2.0,
+    "force_rise_time_max": 0.05,
+    "acceptable_force_variation": 0.2
+  },
+  
+  "data_quality": {
+    "min_sampling_rate": 450,
+    "max_dropout_rate": 0.01,
+    "max_latency_ms": 10,
+    "consistency_check_window": 100,
+    "outlier_detection_threshold": 3.0,
+    "signal_noise_ratio_min": 20.0
+  },
+  
+  "safety_limits": {
+    "emergency_stop_force": 300.0,
+    "max_force_gradient": 500.0,
+    "contact_safety_timeout": 5.0,
+    "system_watchdog_timeout": 30.0
+  },
+  
+  "visualization": {
+    "update_rate_hz": 20,
+    "display_window_size": 1000,
+    "force_scale_factor": 1.0,
+    "cop_display_range": 0.5,
+    "colors": {
+      "foot_fl": "#FF0000",
+      "foot_fr": "#00FF00", 
+      "foot_rl": "#0000FF",
+      "foot_rr": "#FFFF00",
+      "contact": "#FF00FF",
+      "no_contact": "#808080"
+    }
+  },
+  
+  "output": {
+    "log_level": "INFO",
+    "log_directory": "logs",
+    "data_directory": "output",
+    "report_directory": "output/reports",
+    "backup_data": true,
+    "compress_old_data": true,
+    "max_log_files": 10,
+    "max_data_files": 50
+  },
+  
+  "test_scenarios": {
+    "static_tests": [
+      {
+        "name": "zero_load_test",
+        "description": "机器人悬空时的零点测试",
+        "duration": 10,
+        "expected_force_range": [0, 5],
+        "robot_position": "suspended"
+      },
+      {
+        "name": "static_standing",
+        "description": "静态站立测试",
+        "duration": 30,
+        "expected_total_force": 150,
+        "tolerance": 10,
+        "robot_position": "standing"
+      },
+      {
+        "name": "weight_loading",
+        "description": "已知重量负载测试",
+        "duration": 15,
+        "test_weights": [10, 20, 50],
+        "robot_position": "standing"
+      }
+    ],
+    
+    "dynamic_tests": [
+      {
+        "name": "slow_walk",
+        "description": "慢速行走测试",
+        "duration": 60,
+        "gait_speed": 0.2,
+        "expected_contact_pattern": "alternating"
+      },
+      {
+        "name": "normal_walk", 
+        "description": "正常行走测试",
+        "duration": 45,
+        "gait_speed": 0.5,
+        "expected_contact_pattern": "trot"
+      },
+      {
+        "name": "impact_test",
+        "description": "跳跃冲击测试",
+        "duration": 30,
+        "action": "jump",
+        "max_expected_force": 250
+      }
+    ]
+  },
+  
+  "validation_criteria": {
+    "accuracy": {
+      "static_error_max": 0.05,
+      "dynamic_error_max": 0.10,
+      "repeatability_threshold": 0.03
+    },
+    
+    "reliability": {
+      "min_uptime_percentage": 95.0,
+      "max_false_contact_rate": 0.01,
+      "max_missed_contact_rate": 0.01
+    },
+    
+    "performance": {
+      "min_response_time_ms": 2,
+      "max_response_time_ms": 10,
+      "min_bandwidth_hz": 500,
+      "max_noise_level": 0.5
+    }
+  }
+} 
