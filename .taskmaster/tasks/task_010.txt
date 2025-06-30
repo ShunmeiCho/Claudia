@@ -1,0 +1,11 @@
+# Task ID: 10
+# Title: LLM Deployment (Qwen2.5-7B INT4 Quantized)
+# Status: pending
+# Dependencies: 1
+# Priority: high
+# Description: Deploy the Qwen2.5-7B Large Language Model, INT4 quantized, on the NVIDIA Jetson Orin NX. Develop an API for processing Japanese text input to understand intent and extract relevant parameters for robot actions.
+# Details:
+Obtain the Qwen2.5-7B model and quantize it to INT4 precision suitable for Jetson Orin NX (15GB RAM). Use a framework like llama.cpp, TensorRT-LLM, or vLLM if supported and optimized for Orin NX. Create a Python service that exposes an API (e.g., HTTP or ROS2 service) to take Japanese text from ASR, process it with Qwen2.5, and return structured output (intent, entities, parameters). Optimize prompt engineering for Japanese commands related to Go2 actions.
+
+# Test Strategy:
+Test LLM's ability to correctly interpret various Japanese commands (simple, complex, colloquial). Measure inference latency (target 1.5-2.5s for typical commands). Verify accuracy of intent recognition and parameter extraction. Monitor RAM usage during inference.

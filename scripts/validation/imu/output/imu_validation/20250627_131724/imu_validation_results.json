@@ -1,0 +1,145 @@
+{
+  "test_info": {
+    "start_time": "2025-06-27T13:14:24.973764",
+    "test_version": "1.0.0",
+    "robot_model": "Unitree Go2",
+    "test_operator": "m1ng"
+  },
+  "initialization": {
+    "status": "SUCCESS",
+    "imu_specs": {
+      "sampling_rate_hz": 100,
+      "accelerometer_range": "±16g",
+      "gyroscope_range": "±2000°/s"
+    }
+  },
+  "static_test": {
+    "status": "ERROR",
+    "error": "'IMUStaticTester' object has no attribute 'analyze_data'"
+  },
+  "dynamic_test": {
+    "pitch_test": {
+      "test_duration": 0.0,
+      "sample_count": 0,
+      "response_time_ms": 0.0,
+      "rise_time_ms": 0.0,
+      "settling_time_ms": 0.0,
+      "overshoot_percent": 0.0,
+      "tracking_accuracy": {},
+      "dynamic_range": {},
+      "frequency_response": {},
+      "test_status": "ERROR",
+      "pass_criteria": {},
+      "recommendations": []
+    },
+    "roll_test": {
+      "test_duration": 0.0,
+      "sample_count": 0,
+      "response_time_ms": 0.0,
+      "rise_time_ms": 0.0,
+      "settling_time_ms": 0.0,
+      "overshoot_percent": 0.0,
+      "tracking_accuracy": {},
+      "dynamic_range": {},
+      "frequency_response": {},
+      "test_status": "ERROR",
+      "pass_criteria": {},
+      "recommendations": []
+    },
+    "yaw_test": {
+      "test_duration": 0.0,
+      "sample_count": 0,
+      "response_time_ms": 0.0,
+      "rise_time_ms": 0.0,
+      "settling_time_ms": 0.0,
+      "overshoot_percent": 0.0,
+      "tracking_accuracy": {},
+      "dynamic_range": {},
+      "frequency_response": {},
+      "test_status": "ERROR",
+      "pass_criteria": {},
+      "recommendations": []
+    },
+    "translation_test": {
+      "test_duration": 0.0,
+      "sample_count": 0,
+      "response_time_ms": 0.0,
+      "rise_time_ms": 0.0,
+      "settling_time_ms": 0.0,
+      "overshoot_percent": 0.0,
+      "tracking_accuracy": {},
+      "dynamic_range": {},
+      "frequency_response": {},
+      "test_status": "ERROR",
+      "pass_criteria": {},
+      "recommendations": []
+    },
+    "overall": {
+      "test_duration": 0.0,
+      "sample_count": 0,
+      "response_time_ms": 0.0,
+      "rise_time_ms": 0.0,
+      "settling_time_ms": 0.0,
+      "overshoot_percent": 0.0,
+      "tracking_accuracy": {},
+      "dynamic_range": {},
+      "frequency_response": {},
+      "test_status": "UNKNOWN",
+      "pass_criteria": {},
+      "recommendations": [
+        "所有动态测试均符合要求"
+      ]
+    }
+  },
+  "calibration_analysis": {
+    "calibration_type": "comprehensive",
+    "sample_count": 0,
+    "test_duration": 0.0,
+    "accelerometer_calibration": {},
+    "gravity_calibration": {},
+    "accel_bias": {},
+    "accel_scale_factor": {},
+    "gyroscope_calibration": {},
+    "gyro_bias": {},
+    "gyro_noise_characteristics": {},
+    "attitude_calibration": {},
+    "quaternion_consistency": {},
+    "euler_accuracy": {},
+    "temperature_compensation": {},
+    "calibration_quality": {},
+    "test_status": "FAIL",
+    "pass_criteria": {},
+    "recommendations": []
+  },
+  "visualization_test": {
+    "test_status": "PASS",
+    "visualization_started": true,
+    "data_points_plotted": 0,
+    "plot_statistics": {
+      "status": "insufficient_data"
+    },
+    "output_directory": "output/imu_validation/20250627_131719",
+    "recommendations": [
+      "可视化功能正常工作"
+    ]
+  },
+  "overall_assessment": {
+    "status": "ERROR",
+    "test_summary": {
+      "initialization": "SUCCESS",
+      "static_stability": "ERROR",
+      "dynamic_response": "UNKNOWN",
+      "calibration_quality": "FAIL",
+      "visualization": "PASS"
+    },
+    "pass_rate_percent": 40.0,
+    "total_recommendations": 2,
+    "critical_issues": [],
+    "recommendations": [
+      "所有动态测试均符合要求",
+      "可视化功能正常工作"
+    ],
+    "test_completion_time": "2025-06-27T13:17:24.818475",
+    "overall_conclusion": "IMU验证部分完成，通过率40.0%。请查看详细结果和建议。"
+  }
+}

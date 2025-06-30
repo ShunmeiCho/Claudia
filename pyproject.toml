@@ -14,11 +14,8 @@ dependencies = [
     "opencv-python>=4.5.0",
     "pillow>=8.0.0",
     
-    # ROS2 and Unitree SDK dependencies
-    "rclpy>=3.3.0",
-    "sensor-msgs>=4.2.0",
-    "geometry-msgs>=4.2.0",
-    "std-msgs>=4.2.0",
+    # Note: ROS2 dependencies (rclpy, sensor_msgs, etc.) are installed via apt
+    # and should not be listed as pip dependencies
     
     # AI/ML dependencies
     "torch>=1.11.0",

@@ -1,0 +1,30 @@
+{
+  "validation_id": "MOCK_FFVR_20250627_151337",
+  "timestamp": "2025-06-27T15:13:37.032241",
+  "overall_success": true,
+  "phases": {
+    "phase_a": {
+      "name": "数据读取框架验证",
+      "success": true,
+      "score": 95.0
+    },
+    "phase_b": {
+      "name": "静态力分布验证",
+      "success": true,
+      "score": 85.0
+    },
+    "phase_c": {
+      "name": "动态响应测试",
+      "success": true,
+      "score": 82.0
+    },
+    "phase_d": {
+      "name": "综合可视化和文档",
+      "success": true,
+      "score": 90.0
+    }
+  },
+  "overall_score": 88.0,
+  "grade": "B",
+  "status": "PASS"
+}

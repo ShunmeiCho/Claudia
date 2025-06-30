@@ -1,0 +1,120 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Unitree Go2 有线网络足端力传感器验证报告</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 0 20px rgba(0,0,0,0.1); }
+        .header { text-align: center; margin-bottom: 30px; border-bottom: 3px solid #007bff; padding-bottom: 20px; }
+        .status-badge { display: inline-block; padding: 10px 20px; border-radius: 25px; color: white; font-weight: bold; margin: 10px 0; background-color: #dc3545; }
+        .score-circle { display: inline-block; width: 100px; height: 100px; border-radius: 50%; color: white; font-size: 24px; font-weight: bold; line-height: 100px; text-align: center; margin: 10px; background-color: #dc3545; }
+        .section { margin: 30px 0; }
+        .section h2 { color: #333; border-left: 4px solid #007bff; padding-left: 15px; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .info-box { background: #f8f9fa; padding: 15px; border-radius: 5px; border-left: 4px solid #007bff; }
+        .recommendations { background: #fff3cd; padding: 15px; border-radius: 5px; border-left: 4px solid #ffc107; }
+        .recommendations ul { margin: 0; padding-left: 20px; }
+        table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background-color: #f2f2f2; font-weight: bold; }
+        .pass { color: #28a745; font-weight: bold; }
+        .warning { color: #ffc107; font-weight: bold; }
+        .fail { color: #dc3545; font-weight: bold; }
+        .network-highlight { background: #e7f3ff; border-left: 4px solid #007bff; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔌 Unitree Go2 有线网络环境足端力传感器验证报告</h1>
+            <p><strong>报告ID:</strong> WIRED_FFVR_20250627_170430</p>
+            <p><strong>生成时间:</strong> 2025-06-27T17:04:30.973320</p>
+            <div class="status-badge">FAIL</div>
+            <div class="score-circle">0.0</div>
+            <p><strong>等级:</strong> F</p>
+            <p><em>针对有线网络环境优化的验证报告</em></p>
+        </div>
+        
+        
+            <div class="section">
+                <h2>🌐 网络配置信息</h2>
+                <div class="info-box">
+                    <p><strong>机器人IP:</strong> 192.168.123.161</p>
+                    <p><strong>本机IP:</strong> 192.168.123.18</p>
+                    <p><strong>连接类型:</strong> wired_ethernet</p>
+                    <p><strong>环境限制:</strong> cable_length_restricted_movement</p>
+                </div>
+            </div>
+            
+        
+        <div class="section">
+            <h2>📊 测试摘要</h2>
+            <div class="grid">
+                <div class="info-box">
+                    <h3>静态测试</h3>
+                    <p><strong>分数:</strong> 0.0/100</p>
+                    <p><strong>状态:</strong> <span class="fail">失败</span></p>
+                    <p><em>✅ 完全适合有线网络环境</em></p>
+                </div>
+                <div class="info-box">
+                    <h3>动态测试</h3>
+                    <p><strong>分数:</strong> 0.0/100</p>
+                    <p><strong>状态:</strong> <span class="fail">失败</span></p>
+                    <p><em>⚠️ 受网线长度限制</em></p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>🤖 机器人信息</h2>
+            <table>
+                <tr><th>项目</th><th>值</th></tr>
+                <tr><td>型号</td><td>Unitree Go2</td></tr>
+                <tr><td>网络类型</td><td>有线以太网</td></tr>
+                <tr><td>连接延迟</td><td>&lt; 1ms</td></tr>
+                <tr><td>移动限制</td><td>网线长度范围内 (~2-3米)</td></tr>
+            </table>
+        </div>
+        
+        <div class="section">
+            <h2>💡 有线网络环境建议</h2>
+            <div class="recommendations">
+                <ul>
+                    <li>🌐 Wired network environment detected - excellent connection stability</li><li>📡 Low latency communication confirmed (< 1ms)</li><li>❌ Static test failed - recommend sensor calibration in stable environment</li><li>🔧 Check sensor zero-point calibration without movement interference</li><li>⚠️ Dynamic test limitations due to cable constraints</li><li>🏃 Consider in-place movement tests (marching, weight shifting)</li><li>📏 Optimize test scenarios for limited movement range (< 2m)</li><li>🎯 Wired setup ideal for stationary and precision testing</li><li>⚡ Excellent for high-frequency data collection and analysis</li><li>🔄 Consider wireless setup for extensive mobility testing</li>
+                </ul>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>📈 可视化结果</h2>
+            <img src="../visualizations/wired_network_dashboard_20250627_170431.png" alt="wired_network_dashboard_20250627_170431.png" style="max-width: 100%; margin: 10px 0;"><br>
+<img src="../visualizations/network_analysis_20250627_170433.png" alt="network_analysis_20250627_170433.png" style="max-width: 100%; margin: 10px 0;"><br>
+
+        </div>
+        
+        <div class="section">
+            <h2>📝 详细测试数据</h2>
+            <p>完整的测试数据和网络环境分析结果已保存在相应的JSON文件中。</p>
+            <div class="info-box network-highlight">
+                <h4>有线网络优势:</h4>
+                <ul>
+                    <li>📡 超低延迟通信 (&lt; 1ms)</li>
+                    <li>🔒 连接稳定性极高 (99.9%)</li>
+                    <li>📊 适合高频数据采集</li>
+                    <li>🎯 精度测试环境理想</li>
+                </ul>
+                <h4>环境限制:</h4>
+                <ul>
+                    <li>📏 移动范围受网线长度限制</li>
+                    <li>🏃 动态测试需要特殊设计</li>
+                    <li>🔌 需要考虑线缆管理</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+        

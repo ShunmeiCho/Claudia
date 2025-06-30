@@ -1,0 +1,11 @@
+# Task ID: 14
+# Title: LLM-driven Dynamic Action Sequence Generation (Stage 2)
+# Status: pending
+# Dependencies: 10, 11
+# Priority: medium
+# Description: Extend LLM capabilities to parse complex, sequential commands (e.g., "先坐下然后转圈最后握手" - "first sit, then turn, then handshake") and generate an ordered sequence of basic actions or dynamically create ROS action nodes for execution.
+# Details:
+Refine LLM prompting and parsing logic to understand multi-step instructions. The LLM should output a structured plan, e.g., a list of recognized basic actions with their parameters in the correct order. For more complex or novel combinations, the LLM could potentially generate specifications for new ROS action nodes/sequences, though initially focus on sequencing known Sport API actions. This involves more sophisticated state management and execution control than single preset actions.
+
+# Test Strategy:
+Test with various complex sequential commands. Verify the LLM correctly decomposes the command into a sequence of known actions. Observe the robot executing the sequence correctly. Evaluate robustness to variations in phrasing complex commands.

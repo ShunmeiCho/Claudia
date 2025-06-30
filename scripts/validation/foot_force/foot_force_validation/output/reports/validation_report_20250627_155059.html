@@ -1,0 +1,87 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Unitree Go2 足端力传感器验证报告</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 0 20px rgba(0,0,0,0.1); }
+        .header { text-align: center; margin-bottom: 30px; border-bottom: 3px solid #007bff; padding-bottom: 20px; }
+        .status-badge { display: inline-block; padding: 10px 20px; border-radius: 25px; color: white; font-weight: bold; margin: 10px 0; background-color: #dc3545; }
+        .score-circle { display: inline-block; width: 100px; height: 100px; border-radius: 50%; color: white; font-size: 24px; font-weight: bold; line-height: 100px; text-align: center; margin: 10px; background-color: #dc3545; }
+        .section { margin: 30px 0; }
+        .section h2 { color: #333; border-left: 4px solid #007bff; padding-left: 15px; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .info-box { background: #f8f9fa; padding: 15px; border-radius: 5px; border-left: 4px solid #007bff; }
+        .recommendations { background: #fff3cd; padding: 15px; border-radius: 5px; border-left: 4px solid #ffc107; }
+        .recommendations ul { margin: 0; padding-left: 20px; }
+        table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background-color: #f2f2f2; font-weight: bold; }
+        .pass { color: #28a745; font-weight: bold; }
+        .warning { color: #ffc107; font-weight: bold; }
+        .fail { color: #dc3545; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Unitree Go2 足端力传感器验证报告</h1>
+            <p><strong>报告ID:</strong> FFVR_20250627_155057</p>
+            <p><strong>生成时间:</strong> 2025-06-27T15:50:57.927671</p>
+            <div class="status-badge">FAIL</div>
+            <div class="score-circle">0.0</div>
+            <p><strong>等级:</strong> F</p>
+        </div>
+        
+        <div class="section">
+            <h2>测试摘要</h2>
+            <div class="grid">
+                <div class="info-box">
+                    <h3>静态测试</h3>
+                    <p><strong>分数:</strong> 0.0/100</p>
+                    <p><strong>状态:</strong> <span class="fail">失败</span></p>
+                </div>
+                <div class="info-box">
+                    <h3>动态测试</h3>
+                    <p><strong>分数:</strong> 0.0/100</p>
+                    <p><strong>状态:</strong> <span class="fail">失败</span></p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>机器人信息</h2>
+            <table>
+                <tr><th>项目</th><th>值</th></tr>
+                <tr><td>型号</td><td>Unitree Go2</td></tr>
+                <tr><td>序列号</td><td>Unknown</td></tr>
+                <tr><td>固件版本</td><td>Unknown</td></tr>
+            </table>
+        </div>
+        
+        <div class="section">
+            <h2>建议和改进措施</h2>
+            <div class="recommendations">
+                <ul>
+                    <li>静态测试未通过，建议重新校准传感器零点</li><li>检查传感器安装和连接状态</li><li>动态测试未通过，建议检查机器人步态控制</li><li>验证传感器在运动过程中的响应稳定性</li>
+                </ul>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>可视化结果</h2>
+            <img src="../visualizations/comprehensive_dashboard_20250627_155058.png" alt="comprehensive_dashboard_20250627_155058.png" style="max-width: 100%; margin: 10px 0;"><br>
+
+        </div>
+        
+        <div class="section">
+            <h2>详细测试数据</h2>
+            <p>完整的测试数据和详细分析结果已保存在相应的JSON文件中。</p>
+        </div>
+    </div>
+</body>
+</html>
+        

@@ -1,0 +1,66 @@
+{
+  "summary": {
+    "total_tests": 3,
+    "average_score": 0.0,
+    "test_timestamp": "20250627_165743",
+    "config_used": {
+      "step_detection_threshold": 15.0,
+      "gait_analysis_duration": 60.0,
+      "peak_force_threshold": 150.0,
+      "contact_time_min": 0.1,
+      "contact_time_max": 2.0,
+      "force_rise_time_max": 0.05,
+      "acceptable_force_variation": 0.2
+    }
+  },
+  "test_results": {
+    "slow_walk": {
+      "test_name": "slow_walk",
+      "start_time": 1751014663.394633,
+      "end_time": 1751014663.3946333,
+      "duration": 0.0,
+      "total_samples": 0,
+      "step_frequency": 0.0,
+      "contact_time_avg": 0.0,
+      "peak_forces": {},
+      "impulse_values": {},
+      "stability_variance": 0.0,
+      "balance_consistency": 0.0,
+      "coordination_index": 0.0,
+      "test_score": 0.0,
+      "raw_data_stats": {}
+    },
+    "normal_walk": {
+      "test_name": "normal_walk",
+      "start_time": 1751014663.3950114,
+      "end_time": 1751014663.3950117,
+      "duration": 0.0,
+      "total_samples": 0,
+      "step_frequency": 0.0,
+      "contact_time_avg": 0.0,
+      "peak_forces": {},
+      "impulse_values": {},
+      "stability_variance": 0.0,
+      "balance_consistency": 0.0,
+      "coordination_index": 0.0,
+      "test_score": 0.0,
+      "raw_data_stats": {}
+    },
+    "impact_test": {
+      "test_name": "impact_test",
+      "start_time": 1751014663.3953447,
+      "end_time": 1751014663.395345,
+      "duration": 0.0,
+      "total_samples": 0,
+      "step_frequency": 0.0,
+      "contact_time_avg": 0.0,
+      "peak_forces": {},
+      "impulse_values": {},
+      "stability_variance": 0.0,
+      "balance_consistency": 0.0,
+      "coordination_index": 0.0,
+      "test_score": 0.0,
+      "raw_data_stats": {}
+    }
+  }
+}

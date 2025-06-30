@@ -1,0 +1,60 @@
+{
+  "sample_rate": 44100,
+  "channels": 2,
+  "chunk_size": 1024,
+  "test_duration": 5.0,
+  "frequency_range": [20, 20000],
+  "snr_threshold": 40,
+  "thd_threshold": 1.0,
+  "microphone_positions": [
+    {"id": "mic_left", "x": 0.1, "y": 0.0, "z": 0.05},
+    {"id": "mic_right", "x": -0.1, "y": 0.0, "z": 0.05}
+  ],
+  "test_frequencies": [100, 220, 440, 880, 1000, 2000, 5000, 8000, 10000],
+  "white_noise_amplitude": 0.1,
+  "validation_settings": {
+    "phase_a": {
+      "enabled": true,
+      "min_amplitude_threshold": 0.001,
+      "max_latency_ms": 100
+    },
+    "phase_b": {
+      "enabled": true,
+      "channel_consistency_threshold": 0.8,
+      "frequency_accuracy_threshold": 0.95,
+      "noise_floor_threshold_db": -40
+    },
+    "phase_c": {
+      "enabled": false,
+      "note": "扬声器校准功能待实现",
+      "max_thd_percent": 1.0,
+      "min_snr_db": 60
+    },
+    "phase_d": {
+      "enabled": false,
+      "note": "ROS2集成功能待实现",
+      "ros2_node_name": "audio_validator",
+      "topic_prefix": "/claudia/audio"
+    },
+    "phase_e": {
+      "enabled": false,
+      "note": "可视化功能待实现",
+      "output_format": "html",
+      "realtime_display": true
+    }
+  },
+  "output_settings": {
+    "save_recordings": true,
+    "generate_plots": true,
+    "verbose_logging": true,
+    "result_format": "json"
+  },
+  "hardware_settings": {
+    "unitree_go2": {
+      "expected_mic_channels": 2,
+      "expected_speaker_channels": 2,
+      "builtin_voice_assistant": "BenBen",
+      "bypass_assistant": true
+    }
+  }
+} 

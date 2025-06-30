@@ -1,0 +1,11 @@
+# Task ID: 13
+# Title: YOLOv8s Object Detection System (Dual Camera Strategy)
+# Status: pending
+# Dependencies: 1, 5
+# Priority: high
+# Description: Deploy YOLOv8s object detection (TensorRT optimized) on Jetson Orin NX. Implement the dual-camera strategy: Go2 main camera (1280x720@120°) for primary wide-angle detection, and Intel RealSense D435i for depth-enhanced 3D localization and as a high-resolution backup RGB detector. Customize for relevant environmental objects.
+# Details:
+Use YOLOv8s model, optimized with TensorRT for Orin NX. Primary detection pipeline: Go2 main camera -> YOLOv8s -> 2D bounding boxes. Secondary/Enhancement: RealSense D435i RGB stream for backup detection (if main fails or for higher res details) and its depth stream to project 2D detections from either camera into 3D space. Implement fusion logic for detections from both sources if active concurrently, and a failover mechanism. Customize COCO classes or retrain for objects like 'person', 'desk', 'chair', 'bookshelf', 'door', 'signage'. Allocate GPU resources (e.g., 25% for main YOLO, 15% for backup if active).
+
+# Test Strategy:
+Test object detection accuracy (mAP) and speed (FPS, target 60 FPS for main camera, 40 FPS for RealSense backup) for customized classes. Verify 3D localization accuracy of detected objects (<0.15m error). Test camera failover and fusion logic. Ensure GPU usage is within allocated budget.

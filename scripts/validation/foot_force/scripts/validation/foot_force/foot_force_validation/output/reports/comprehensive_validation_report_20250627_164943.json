@@ -1,0 +1,50 @@
+{
+  "report_id": "FFVR_20250627_164939",
+  "generation_time": "2025-06-27T16:49:39.997086",
+  "robot_info": {
+    "model": "Unitree Go2",
+    "serial_number": "Unknown",
+    "firmware_version": "Unknown",
+    "sensor_config": {
+      "sampling_rate": 500,
+      "force_threshold": 5.0,
+      "max_force_per_foot": 200.0
+    }
+  },
+  "test_environment": {
+    "test_date": "2025-06-27",
+    "test_location": "Laboratory",
+    "operator": "Automated System",
+    "temperature": "Room Temperature",
+    "humidity": "Normal",
+    "surface_type": "Stable Platform",
+    "notes": "Automated validation testing"
+  },
+  "static_results": {
+    "success": false,
+    "error": "静态测试执行失败"
+  },
+  "static_score": 0.0,
+  "static_passed": false,
+  "dynamic_results": {
+    "success": false,
+    "cancelled": true
+  },
+  "dynamic_score": 0.0,
+  "dynamic_passed": false,
+  "overall_score": 0.0,
+  "overall_grade": "F",
+  "validation_status": "FAIL",
+  "recommendations": [
+    "Static test failed, recommend recalibrating sensor zero point",
+    "Check sensor installation and connection status",
+    "Dynamic test failed, recommend checking robot gait control",
+    "Verify sensor response stability during motion"
+  ],
+  "static_data_file": "",
+  "dynamic_data_file": "",
+  "visualization_files": [
+    "scripts/validation/foot_force/foot_force_validation/output/visualizations/comprehensive_dashboard_20250627_164940.png",
+    "scripts/validation/foot_force/foot_force_validation/output/visualizations/test_results_comparison_20250627_164941.png"
+  ]
+}

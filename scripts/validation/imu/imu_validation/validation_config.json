@@ -1,0 +1,87 @@
+{
+  "meta": {
+    "version": "1.0.0",
+    "description": "Unitree Go2 IMU综合验证配置",
+    "created": "2025-01-27",
+    "author": "Claudia Robot Project"
+  },
+  
+  "imu_config": {
+    "sampling_rate_hz": 100,
+    "test_duration_seconds": 30,
+    "timeout_seconds": 10,
+    "network_interface": "eth0",
+    "data_buffer_size": 1000
+  },
+  
+  "validation_sequence": [
+    "imu_initialization",
+    "data_stream_verification",
+    "static_stability_test",
+    "dynamic_response_test",
+    "calibration_analysis",
+    "visualization_test",
+    "report_generation"
+  ],
+  
+  "test_parameters": {
+  "static_test": {
+      "duration_seconds": 60,
+      "stability_threshold": {
+        "gyroscope_std_max": 0.1,
+        "accelerometer_std_max": 0.05,
+        "quaternion_drift_max": 0.01
+    }
+  },
+  "dynamic_test": {
+      "duration_seconds": 120,
+      "response_tests": [
+        "pitch_test",
+        "roll_test", 
+        "yaw_test",
+        "translation_test"
+      ],
+      "response_threshold_ms": 50
+  },
+  "calibration_analysis": {
+      "gravity_reference": 9.81,
+    "gravity_tolerance": 0.2,
+      "bias_analysis_samples": 1000,
+      "temperature_analysis": true
+    }
+  },
+  
+  "quality_thresholds": {
+    "data_rate": {
+      "expected_hz": 100,
+      "tolerance_percent": 10,
+      "dropout_rate_max": 0.01
+    },
+    "noise_levels": {
+      "accelerometer_noise_max": 0.02,
+      "gyroscope_noise_max": 0.01,
+      "snr_min_db": 40
+    },
+    "accuracy": {
+      "gravity_error_max_percent": 2,
+      "orientation_error_max_degrees": 1,
+      "angular_velocity_error_max_percent": 5
+    }
+  },
+  
+  "visualization": {
+    "real_time_plots": true,
+    "plot_update_interval_ms": 100,
+    "max_plot_points": 500,
+    "enable_3d_orientation": true,
+    "save_plots": true
+  },
+  
+  "output": {
+    "log_level": "INFO",
+    "save_raw_data": true,
+    "generate_html_report": true,
+    "generate_json_report": true,
+    "plot_formats": ["png", "svg"]
+  }
+}
