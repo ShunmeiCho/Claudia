@@ -15,13 +15,25 @@
 - Task 11: Preset Action Mapping & Execution
 """
 
-# 导入主要控制类（待实现）
+# 导入主要控制类
+try:
+    from .led_controller import LEDController, ClaudiaLEDMode, LEDBrightnessLevel
+    from .led_controller import create_led_controller, get_led_controller
+    LED_AVAILABLE = True
+except ImportError:
+    LED_AVAILABLE = False
+
+# 导入其他控制类（待实现）
 # from .unitree_controller import UnitreeController
-# from .led_controller import LEDController
 # from .action_mapper import ActionMapper
 
 __all__ = [
+    'LEDController',
+    'ClaudiaLEDMode', 
+    'LEDBrightnessLevel',
+    'create_led_controller',
+    'get_led_controller',
+    'LED_AVAILABLE',
     # 'UnitreeController',
-    # 'LEDController', 
     # 'ActionMapper',
 ]
