@@ -51,7 +51,8 @@ class BrainOutput:
     api_code: Optional[int] # 单个动作API
     sequence: Optional[List[int]] = None # 动作序列
     confidence: float = 1.0
-    
+    reasoning: str = ""     # 推理过程/拒绝原因（用于审计和调试）
+
     def to_dict(self) -> Dict:
         """转换为字典"""
         result = {
@@ -60,6 +61,8 @@ class BrainOutput:
         }
         if self.sequence:
             result["sequence"] = self.sequence
+        if self.reasoning:
+            result["reasoning"] = self.reasoning
         return result
 
 class ProductionBrain:
