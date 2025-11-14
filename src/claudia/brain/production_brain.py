@@ -280,6 +280,10 @@ class ProductionBrain:
             self.audit_logger = None
             self.logger.warning("⚠️ 审计日志器不可用")
 
+        # 姿态跟踪（用于模拟模式状态准确性）
+        self.last_posture_standing = False  # 初始假设坐姿
+        self.last_executed_api = None       # 最后执行的API代码
+
         self.logger.info("🧠 生产大脑初始化完成")
         self.logger.info(f"   3B模型: {self.model_3b}")
         self.logger.info(f"   7B模型: {self.model_7b}")
@@ -586,6 +590,88 @@ class ProductionBrain:
         }
         return HOTPATH_MAP.get(cmd)
 
+    def _is_conversational_query(self, command: str) -> bool:
+        """
+        检测是否为对话型查询（不应返回动作API）
+
+        Args:
+            command: 用户命令
+
+        Returns:
+            True表示对话查询，False表示动作命令
+        """
+        cmd = command.strip().lower()
+
+        # 对话型关键词模式
+        CONVERSATIONAL_PATTERNS = [
+            # 日语
+            'あなた', '君', 'きみ', '名前', 'なまえ', '誰', 'だれ',
+            '何', 'なに', 'どう', 'なぜ', 'いつ', 'どこ',
+            'かわいい', '可愛い', 'すごい', '凄い', 'ありがとう', 'ごめん',
+            'おはよう', 'こんばんは', 'さようなら', 'おやすみ',
+            # 英语
+            'who are you', 'what is your name', 'your name',
+            'who', 'what', 'why', 'when', 'where', 'how',
+            'you are', "you're", 'thank you', 'thanks', 'sorry',
+            'good morning', 'good evening', 'good night', 'goodbye',
+            'cute', 'cool', 'awesome', 'nice',
+            # 中文
+            '你是', '你叫', '你的名字', '谁', '什么', '为什么',
+            '怎么', '哪里', '什么时候',
+            '可爱', '厉害', '谢谢', '对不起',
+            '早上好', '晚上好', '晚安', '再见',
+        ]
+
+        # 检查是否包含对话关键词
+        for pattern in CONVERSATIONAL_PATTERNS:
+            if pattern in cmd:
+                return True
+
+        return False
+
+    def _generate_conversational_response(self, command: str) -> str:
+        """
+        生成对话型回复（不执行动作）
+
+        Args:
+            command: 用户命令
+
+        Returns:
+            友好的对话回复
+        """
+        cmd = command.strip().lower()
+
+        # 名字/身份相关
+        if any(k in cmd for k in ['あなた', '誰', '名前', 'who', 'your name', '你是', '你叫']):
+            return "私はClaudiaです。Unitree Go2のAIアシスタントです。"
+
+        # 赞美相关
+        if any(k in cmd for k in ['可愛い', 'かわいい', 'cute', '可爱']):
+            return "ありがとうございます！"
+
+        if any(k in cmd for k in ['すごい', '凄い', 'cool', 'awesome', '厉害']):
+            return "ありがとうございます！頑張ります。"
+
+        # 感谢相关
+        if any(k in cmd for k in ['ありがとう', 'thank', '谢谢']):
+            return "どういたしまして！"
+
+        # 问候相关
+        if any(k in cmd for k in ['おはよう', 'good morning', '早上好']):
+            return "おはようございます！"
+
+        if any(k in cmd for k in ['こんばんは', 'good evening', '晚上好']):
+            return "こんばんは！"
+
+        if any(k in cmd for k in ['おやすみ', 'good night', '晚安']):
+            return "おやすみなさい！"
+
+        if any(k in cmd for k in ['さようなら', 'goodbye', 'bye', '再见']):
+            return "さようなら！またね。"
+
+        # 默认对话回复
+        return "はい、何でしょうか？"
+
     async def _call_ollama_v2(self, model: str, command: str, timeout: int = 10) -> Optional[Dict]:
         """
         调用Ollama（Track A优化版）
@@ -722,6 +808,8 @@ class ProductionBrain:
         if state_snapshot:
             raw_batt = state_snapshot.battery_level
             state_snapshot.battery_level = self._normalize_battery(raw_batt)
+            # 使用跟踪的姿态（模拟模式更准确）
+            state_snapshot.is_standing = self.last_posture_standing
             self.logger.info(
                 f"📊 状态快照: 电池{state_snapshot.battery_level*100:.0f}%, "
                 f"姿态{'站立' if state_snapshot.is_standing else '非站立'}"
@@ -837,19 +925,18 @@ class ProductionBrain:
                 else:
                     api_code = safe_api
 
-            # 3) 执行动作
+            # 3) 构建输出（不执行，由commander统一执行）
             brain_output = BrainOutput(
                 response="了解しました",
                 api_code=api_code,
                 sequence=sequence,
                 confidence=1.0,
-                reasoning="hotpath_executed"
+                reasoning="hotpath_executed",
+                success=True  # 标记为待执行（非已执行）
             )
 
-            success = await self.execute_action(brain_output)
-
             elapsed = (time.time() - start_time) * 1000
-            self.logger.info(f"✅ 热路径执行完成 ({elapsed:.0f}ms, success={success})")
+            self.logger.info(f"✅ 热路径处理完成 ({elapsed:.0f}ms)")
 
             # 4) 审计日志
             self._log_audit(command, brain_output,
@@ -857,17 +944,33 @@ class ProductionBrain:
                           model_used="hotpath", current_state=state_snapshot,
                           llm_output=None, safety_verdict="ok")
 
-            return BrainOutput(
-                response="了解しました" if success else "実行に失敗しました",
-                api_code=api_code,
-                sequence=sequence,
-                confidence=1.0,
-                reasoning="hotpath_executed",
-                success=success
-            )
+            return brain_output
 
         # 热路径未命中，记录日志
         self.logger.info(f"🔍 热路径未命中，使用LLM处理: {command}")
+
+        # ===== 3.5) 对话查询检测（避免LLM将对话误解为动作） =====
+        if self._is_conversational_query(command):
+            conversational_response = self._generate_conversational_response(command)
+            elapsed = (time.time() - start_time) * 1000
+            self.logger.info(f"💬 对话查询识别 ({elapsed:.0f}ms)")
+
+            dialog_output = BrainOutput(
+                response=conversational_response,
+                api_code=None,  # 对话不执行动作
+                sequence=None,
+                confidence=1.0,
+                reasoning="conversational_query",
+                success=True
+            )
+
+            # 审计日志
+            self._log_audit(command, dialog_output,
+                          route="conversational", elapsed_ms=elapsed, cache_hit=False,
+                          model_used="dialog_detector", current_state=state_snapshot,
+                          llm_output=None, safety_verdict="dialog")
+
+            return dialog_output
 
         # 0.5. 特殊命令处理 - 舞蹈随机选择（使用state_snapshot）
         dance_commands = ["dance", "ダンス", "跳舞", "舞蹈", "踊る", "踊って"]
@@ -1194,13 +1297,19 @@ class ProductionBrain:
                 
                 self.logger.info(f"   返回码: {result}")
                 
-                # 更新状态
+                # 更新状态（同时更新姿态跟踪）
                 if brain_output.api_code == 1004:  # StandUp
                     self.robot_state = "standing"
+                    self.last_posture_standing = True
                 elif brain_output.api_code == 1009:  # Sit
                     self.robot_state = "sitting"
+                    self.last_posture_standing = False
                 elif brain_output.api_code == 1005:  # StandDown
                     self.robot_state = "lying"
+                    self.last_posture_standing = False
+
+                # 记录最后执行的API（用于审计）
+                self.last_executed_api = brain_output.api_code
                 
             # 判断执行结果（包含3104成功码）
             if result == 0:
