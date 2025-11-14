@@ -58,6 +58,31 @@ TypeError: __init__() got an unexpected keyword argument 'success'
 ✅ 默认值正确设置（reasoning="", success=True）
 ```
 
+### 问题3：Python 3.8兼容性 - asyncio.to_thread ✅ 已修复
+```
+🧠 Ollama调用错误: module 'asyncio' has no attribute 'to_thread'
+```
+
+**修复内容**：
+- Commit c14935e：替换`asyncio.to_thread`为`loop.run_in_executor`
+- 文件：`src/claudia/brain/production_brain.py:634-640`
+
+**根本原因**：
+- `asyncio.to_thread`是Python 3.9+新增API
+- 系统运行Python 3.8.10，不支持此API
+
+**影响范围**：
+- ❌ 非热路径、非缓存的LLM调用失败（如"可愛ね"、"あなたは誰"）
+- ✅ 热路径命令不受影响（不调用LLM）
+- ✅ 缓存命中不受影响（跳过LLM）
+
+**验证结果**：
+```python
+✅ loop.run_in_executor在Python 3.8.10正常工作
+✅ 异步超时控制保持不变
+✅ 与热路径、缓存逻辑完全兼容
+```
+
 ---
 
 ## 硬件测试准备
