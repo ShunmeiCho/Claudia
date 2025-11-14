@@ -631,9 +631,10 @@ class ProductionBrain:
                 content = response['message']['content']
                 return json.loads(content)
 
-            # 使用asyncio.to_thread避免阻塞（修复REVIEW问题）
+            # 使用run_in_executor避免阻塞（Python 3.8兼容）
+            loop = asyncio.get_event_loop()
             result = await asyncio.wait_for(
-                asyncio.to_thread(_sync_ollama_call),
+                loop.run_in_executor(None, _sync_ollama_call),
                 timeout=timeout
             )
             return result
