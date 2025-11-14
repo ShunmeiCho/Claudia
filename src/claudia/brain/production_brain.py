@@ -765,31 +765,99 @@ class ProductionBrain:
         if hotpath_api is not None:
             self.logger.info(f"⚡ 热路径命中: {command} → {hotpath_api}")
 
-            # 热路径也要走最终安全门
-            safe_api, gate_reason = self._final_safety_gate(hotpath_api, state_snapshot)
-            if safe_api != hotpath_api:
-                # 被拒绝或降级
+            # ===== 热路径安全链路：SafetyValidator + 最终安全门 =====
+
+            # 1) SafetyValidator检查（站立需求、动作依赖）
+            api_code = hotpath_api
+            sequence = None
+
+            if self.safety_validator and state_snapshot:
+                safety_result = self.safety_validator.validate_action(api_code, state_snapshot)
+
+                if not safety_result.is_safe:
+                    # SafetyValidator拒绝
+                    self.logger.warning(f"⛔ 热路径安全验证失败: {safety_result.reason}")
+                    elapsed = (time.time() - start_time) * 1000
+
+                    self._log_audit(command, BrainOutput(response=safety_result.reason, api_code=None),
+                                  route="hotpath_safety_rejected", elapsed_ms=elapsed, cache_hit=False,
+                                  model_used="hotpath", current_state=state_snapshot,
+                                  llm_output=None, safety_verdict="rejected_safety_validator")
+
+                    return BrainOutput(
+                        response=safety_result.reason,
+                        api_code=None,
+                        confidence=1.0,
+                        reasoning="hotpath_safety_rejected",
+                        success=False
+                    )
+
+                # 检查是否需要序列补全（如坐姿→需先站立）
+                if safety_result.modified_sequence:
+                    self.logger.info(f"🔧 热路径自动补全序列: {safety_result.modified_sequence}")
+                    sequence = safety_result.modified_sequence
+                    if safety_result.should_use_sequence_only:
+                        api_code = None  # 仅执行序列，避免重复执行
+
+            # 2) 最终安全门（电量硬性约束）
+            final_api = api_code if api_code is not None else (sequence[-1] if sequence else None)
+            safe_api, gate_reason = self._final_safety_gate(final_api, state_snapshot)
+
+            if safe_api is None:
+                # 电量不足，拒绝
+                self.logger.warning(f"⛔ 热路径最终安全门拒绝: {gate_reason}")
                 elapsed = (time.time() - start_time) * 1000
-                response_text = "安全のため動作を停止しました" if safe_api is None else "安全のため動作を調整しました"
-                self._log_audit(command, BrainOutput(response=response_text, api_code=safe_api),
-                              route="hotpath_gate", elapsed_ms=elapsed, cache_hit=True,
+
+                self._log_audit(command, BrainOutput(response=f"安全のため動作を停止しました", api_code=None),
+                              route="hotpath_final_gate_rejected", elapsed_ms=elapsed, cache_hit=False,
                               model_used="hotpath", current_state=state_snapshot,
-                              llm_output=None, safety_verdict=f"gate:{gate_reason}")
+                              llm_output=None, safety_verdict=f"rejected_final_gate:{gate_reason}")
+
                 return BrainOutput(
-                    response=response_text,
-                    api_code=safe_api,
+                    response=f"安全のため動作を停止しました ({gate_reason})",
+                    api_code=None,
                     confidence=1.0,
-                    reasoning=f"Hotpath + {gate_reason}"
+                    reasoning="hotpath_final_gate_rejected",
+                    success=False
                 )
 
-            # 热路径安全通过，直接返回
-            elapsed = (time.time() - start_time) * 1000
-            self.logger.info(f"✅ 热路径执行 ({elapsed:.0f}ms)")
-            return BrainOutput(
+            # 若降级，调整最终执行的动作
+            if safe_api != final_api:
+                self.logger.info(f"🔄 热路径动作降级: {final_api} → {safe_api}")
+                if sequence:
+                    # 有序列：替换最后一个动作
+                    sequence = sequence[:-1] + [safe_api]
+                    api_code = None
+                else:
+                    api_code = safe_api
+
+            # 3) 执行动作
+            brain_output = BrainOutput(
                 response="了解しました",
-                api_code=safe_api,
+                api_code=api_code,
+                sequence=sequence,
                 confidence=1.0,
-                reasoning="Hotpath execution"
+                reasoning="hotpath_executed"
+            )
+
+            success = await self.execute_action(brain_output)
+
+            elapsed = (time.time() - start_time) * 1000
+            self.logger.info(f"✅ 热路径执行完成 ({elapsed:.0f}ms, success={success})")
+
+            # 4) 审计日志
+            self._log_audit(command, brain_output,
+                          route="hotpath", elapsed_ms=elapsed, cache_hit=False,
+                          model_used="hotpath", current_state=state_snapshot,
+                          llm_output=None, safety_verdict="ok")
+
+            return BrainOutput(
+                response="了解しました" if success else "実行に失敗しました",
+                api_code=api_code,
+                sequence=sequence,
+                confidence=1.0,
+                reasoning="hotpath_executed",
+                success=success
             )
 
         # 热路径未命中，记录日志
