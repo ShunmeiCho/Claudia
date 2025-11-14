@@ -52,12 +52,14 @@ class BrainOutput:
     sequence: Optional[List[int]] = None # 动作序列
     confidence: float = 1.0
     reasoning: str = ""     # 推理过程/拒绝原因（用于审计和调试）
+    success: bool = True    # 执行是否成功（硬件模式）
 
     def to_dict(self) -> Dict:
         """转换为字典"""
         result = {
             "response": self.response,
-            "api_code": self.api_code
+            "api_code": self.api_code,
+            "success": self.success
         }
         if self.sequence:
             result["sequence"] = self.sequence
