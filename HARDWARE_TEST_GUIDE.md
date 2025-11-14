@@ -40,17 +40,22 @@ ROS2初始化失败，启用模拟模式                           # ← 预期f
 ### 问题2：BrainOutput TypeError ✅ 已修复
 ```
 TypeError: __init__() got an unexpected keyword argument 'reasoning'
+TypeError: __init__() got an unexpected keyword argument 'success'
 ```
 
 **修复内容**：
-- 在`BrainOutput` dataclass添加`reasoning`字段
-- 文件：`src/claudia/brain/production_brain.py:54`
-- Commit：d252ab3
+- 第一次修复（Commit d252ab3）：添加`reasoning`字段
+- 第二次修复（Commit 221e9b3）：添加`success`字段
+- 文件：`src/claudia/brain/production_brain.py:54-55`
+
+**根本原因**：
+热路径SafetyValidator集成时添加了新参数，但dataclass定义未同步更新
 
 **验证结果**：
 ```python
-✅ BrainOutput创建成功（含reasoning参数）
-✅ to_dict()正确包含reasoning字段
+✅ BrainOutput创建成功（含reasoning和success参数）
+✅ to_dict()正确包含所有字段
+✅ 默认值正确设置（reasoning="", success=True）
 ```
 
 ---
