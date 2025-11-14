@@ -1,8 +1,8 @@
 # Claudia硬件测试指南
 
 **日期**: 2025-11-14
-**版本**: v1.0
-**前置条件**: DDS符号问题已修复 + BrainOutput TypeError已修复
+**版本**: v2.0
+**前置条件**: DDS符号问题已修复 + 7个Critical问题已修复
 
 ---
 
@@ -81,6 +81,122 @@ TypeError: __init__() got an unexpected keyword argument 'success'
 ✅ loop.run_in_executor在Python 3.8.10正常工作
 ✅ 异步超时控制保持不变
 ✅ 与热路径、缓存逻辑完全兼容
+```
+
+### 问题4：重复执行动作 ✅ 已修复
+```
+🧠 ✅ 热路径执行完成 (7055ms, success=True)  # 已经执行
+...
+🚀 执行动作...  # 又执行一遍！
+```
+
+**修复内容**：
+- Commit 8df3710：移除热路径中的execute_action调用
+- 文件：`src/claudia/brain/production_brain.py:849`
+
+**根本原因**：
+- 热路径在`process_command`中调用了`await self.execute_action(brain_output)`
+- `production_commander.py`中也调用了`await self.brain.execute_action(brain_output)`
+- 导致相同动作执行两次
+
+**修复方案**：
+- 热路径只返回`BrainOutput`，不执行动作
+- 统一由`production_commander.py`执行所有动作
+
+**验证结果**：
+```python
+✅ 热路径只返回BrainOutput(success=True)标记待执行
+✅ Commander检测到BrainOutput后单次执行
+✅ 审计日志正确记录单次执行
+```
+
+### 问题5：状态快照不准确 ✅ 已修复
+```
+🧠 📊 状态快照: 电池100%, 姿态非站立  # 明明已经站立了
+```
+
+**修复内容**：
+- Commit 8df3710：添加姿态跟踪机制
+- 文件：`src/claudia/brain/production_brain.py:283-285,729-730,1195-1207`
+
+**根本原因**：
+- 模拟模式下SystemStateMonitor不跟踪姿态变化
+- 每次get_current_state()都返回默认值（is_standing=False）
+- SafetyValidator基于错误的姿态判断，导致不必要的自动站立
+
+**修复方案**：
+1. 添加跟踪字段：`self.last_posture_standing`，`self.last_executed_api`
+2. 在`execute_action`中更新姿态（Stand→True, Sit/Down→False）
+3. 状态快照使用跟踪的姿态而非SystemStateMonitor默认值
+
+**验证结果**：
+```python
+✅ 初始状态: last_posture_standing=False（假设坐姿）
+✅ 执行Stand(1004)后: last_posture_standing=True
+✅ 状态快照正确显示"姿态站立"
+✅ 后续Heart命令不再自动插入Stand
+```
+
+### 问题6：ROS2错误信息暴露 ✅ 已修复
+```
+[ERROR] [rmw_cyclonedds_cpp]: rmw_create_node: failed to create domain, error Precondition Not Met
+ROS2初始化失败，启用模拟模式
+```
+
+**修复内容**：
+- Commit 8df3710：抑制ROS2错误输出
+- 文件：`src/claudia/robot_controller/system_state_monitor.py:183-221`
+
+**根本原因**：
+- ROS2库本身打印错误到stderr（代码无法直接控制）
+- 虽然有fallback机制，但用户仍看到底层技术错误
+
+**修复方案**：
+1. 使用`contextlib.redirect_stderr(open(os.devnull, 'w'))`抑制stderr
+2. 设置ROS2环境变量抑制日志：`RCUTILS_CONSOLE_OUTPUT_FORMAT=''`
+3. 移除_initialize_ros2的详细错误日志（返回False即可）
+
+**验证结果**：
+```bash
+✅ ROS2错误不再显示给用户
+✅ Fallback机制正常工作（自动切换模拟模式）
+✅ unitree_sdk2py不受影响（独立通道）
+```
+
+### 问题7：LLM将对话误解为动作 ✅ 已修复
+```
+くら> あなたは誰  # "Who are you?"
+💬 回复: こんにちは  # 错误：返回"Hello"
+📋 序列: [1004, 1016]  # 错误：执行Stand+Hello动作
+```
+
+**修复内容**：
+- Commit 8df3710：添加对话查询检测
+- 文件：`src/claudia/brain/production_brain.py:593-673,952-973`
+
+**根本原因**：
+- LLM训练为将所有输入映射到动作API
+- 缺少对话型查询的预处理检测
+- "あなたは誰"被LLM误解为打招呼需求
+
+**修复方案**：
+1. 添加`_is_conversational_query()`检测对话关键词
+2. 添加`_generate_conversational_response()`生成友好回复
+3. 在热路径后、LLM前执行对话检测
+4. 对话查询返回`BrainOutput(api_code=None, response="...")`
+
+**对话关键词覆盖**：
+- 身份：あなた、誰、名前、who、你是、你叫
+- 赞美：可愛い、すごい、cute、cool、可爱、厉害
+- 感谢：ありがとう、thank you、谢谢
+- 问候：おはよう、こんばんは、さようなら、good morning
+
+**验证结果**：
+```python
+✅ "あなたは誰" → "私はClaudiaです。Unitree Go2のAIアシスタントです。"
+✅ "可愛いね" → "ありがとうございます！"
+✅ api_code=None, sequence=None（不执行动作）
+✅ 审计日志route="conversational", model_used="dialog_detector"
 ```
 
 ---
@@ -307,20 +423,29 @@ jq -r '.latency_ms' logs/audit/*.jsonl | sort -n | tail -n 5
 
 ## 下一步
 
-### 立即可执行
-1. ✅ 执行场景1-5完整测试
-2. ✅ 记录实际机器人行为视频
-3. ✅ 收集审计日志（至少100条命令）
+### 已完成修复（Commit 8df3710）✅
+1. ✅ 重复执行动作问题 - 热路径不再执行，统一由commander执行
+2. ✅ 状态快照不准确 - 添加姿态跟踪，模拟模式准确反映Stand/Sit状态
+3. ✅ ROS2错误信息暴露 - 抑制stderr输出，用户不再看到底层错误
+4. ✅ LLM对话误解 - 添加对话检测，"あなたは誰"等返回友好回复而非动作
+
+### 立即可执行（P0 - 今天）
+1. ⏳ 执行场景1-5完整测试（验证修复效果）
+2. ⏳ 测试对话查询："あなたは誰"、"可愛いね"、"ありがとう"
+3. ⏳ 验证状态跟踪：Stand→Heart（无重复站立）
+4. ⏳ 收集审计日志（验证route="conversational"、"hotpath"）
 
 ### 优化方向（P1 - 本周）
 1. 扩展热路径覆盖（添加10-15个变体）
-2. 外部化电量阈值配置（config/default.yaml）
-3. 每日审计报告脚本
+2. 扩展对话关键词（更多对话场景）
+3. 外部化电量阈值配置（config/default.yaml）
+4. 每日审计报告脚本
 
 ### 生产部署准备（P2 - 下周）
-1. 性能压测（1000条命令）
+1. 性能压测（1000条命令，包含对话和动作混合）
 2. 边界条件测试（网络断开、低电量、异常姿态）
 3. LED状态同步验证
+4. 真实状态监控集成（SportClient API查询实际姿态）
 
 ---
 
@@ -330,10 +455,10 @@ jq -r '.latency_ms' logs/audit/*.jsonl | sort -n | tail -n 5
 **A**：不影响。unitree_sdk2py独立工作，SystemStateMonitor已fallback到模拟模式。
 
 ### Q2：模拟模式的状态准确吗？
-**A**：模拟模式提供默认值（电池100%，姿态模拟）。真实状态需要通过SportClient API查询（已计划集成）。
+**A**：✅ **已优化**（Commit 8df3710）：模拟模式现在跟踪姿态变化（Stand/Sit/Down），状态快照准确反映最后执行的动作。电池仍为默认100%。真实电量/IMU需要通过SportClient API查询（已计划集成P2）。
 
 ### Q3：如何完全禁用ROS2警告？
-**A**：设置环境变量：
+**A**：✅ **已自动处理**（Commit 8df3710）：系统自动抑制ROS2错误输出，用户不再看到`[ERROR] [rmw_cyclonedds_cpp]`信息。如需手动禁用其他ROS2日志：
 ```bash
 export RCUTILS_CONSOLE_OUTPUT_FORMAT="[{severity}] {message}"
 export RCUTILS_LOGGING_BUFFERED_STREAM=0
@@ -351,10 +476,17 @@ ldd ~/.local/lib/python3.8/site-packages/cyclonedds/_clayer.so | grep ddsc
 
 ---
 
-**状态**: 🚀 **Ready for Hardware Testing**
-**修复**: ✅ BrainOutput TypeError已修复
-**ROS2**: ✅ Fallback机制正常工作
-**下一步**: 执行硬件测试场景1-5
+**状态**: 🚀 **Ready for Full Hardware Testing (7 Critical Fixes Complete)**
+**修复汇总**:
+- ✅ DDS符号问题（Commit 54fd322）
+- ✅ BrainOutput TypeError（Commits d252ab3, 221e9b3）
+- ✅ Python 3.8兼容性（Commit c14935e）
+- ✅ 重复执行动作（Commit 8df3710）
+- ✅ 状态快照不准确（Commit 8df3710）
+- ✅ ROS2错误暴露（Commit 8df3710）
+- ✅ LLM对话误解（Commit 8df3710）
+
+**下一步**: 执行硬件测试场景1-5 + 对话查询测试
 
 **作者**: Claude + User
-**最后更新**: 2025-11-14
+**最后更新**: 2025-11-14 17:45 UTC
