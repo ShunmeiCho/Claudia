@@ -76,8 +76,8 @@ class ProductionBrain:
 
         # Track A/B模型配置（修复REVIEW：支持环境变量切换）
         import os
-        self.model_3b = os.getenv("BRAIN_MODEL_3B", "claudia-go2-3b:v11.2")  # Track A默认
-        self.model_7b = os.getenv("BRAIN_MODEL_7B", "claudia-go2-7b:v7")      # Track A默认
+        self.model_3b = os.getenv("BRAIN_MODEL_3B", "claudia-go2-3b:v11.3")  # Track A备用（已弃用，用7B）
+        self.model_7b = os.getenv("BRAIN_MODEL_7B", "claudia-go2-7b:v12-simple")  # Track A主力（简化输出）
 
         # 灰度切流配置（可选）
         self.ab_test_ratio = float(os.getenv("AB_TEST_RATIO", "0.0"))  # 0.0=全Track A, 1.0=全Track B
@@ -1126,35 +1126,23 @@ class ProductionBrain:
                 sequence=sequence
             )
 
-        # 2. 判断复杂度并路由（修复REVIEW：支持灰度切流，使用state_snapshot）
-        is_complex = self._is_complex_command(command)
-
-        # 2.5. 灰度切流决策（可选）
-        selected_3b = self.model_3b
+        # 2. 路由决策：默认使用7B（理解能力强，延迟可接受）
         selected_7b = self.model_7b
+
+        # 2.5. 灰度切流决策（可选，用于A/B测试）
         if self.ab_test_ratio > 0:
             import random
             if random.random() < self.ab_test_ratio:
-                # 切换到Track B模型（假设intelligent模型为Track B）
-                if "intelligent" not in selected_3b:
-                    selected_3b = "claudia-intelligent-7b:v1"  # 暂时用7B代替3B
-                    self.logger.debug(f"🔬 灰度切流→Track B: {selected_3b}")
+                # 切换到Track B模型（如果需要测试其他模型）
                 if "intelligent" not in selected_7b:
                     selected_7b = "claudia-intelligent-7b:v1"
                     self.logger.debug(f"🔬 灰度切流→Track B: {selected_7b}")
 
-        if is_complex:
-            self.logger.info("🔄 路由到7B模型（复杂指令）")
-            # Track B关键修复：注入状态信息（使用state_snapshot）
-            enhanced_cmd = self._build_enhanced_prompt(command, selected_7b, state_snapshot)
-            result = await self._call_ollama_v2(selected_7b, enhanced_cmd, timeout=10)
-            model_used = "7B"
-        else:
-            self.logger.info("⚡ 路由到3B模型（简单指令）")
-            # Track B关键修复：注入状态信息（使用state_snapshot）
-            enhanced_cmd = self._build_enhanced_prompt(command, selected_3b, state_snapshot)
-            result = await self._call_ollama_v2(selected_3b, enhanced_cmd, timeout=5)
-            model_used = "3B"
+        # 统一使用7B处理所有非热路径命令（理解能力 > 速度）
+        self.logger.info("🧠 使用7B模型推理...")
+        enhanced_cmd = self._build_enhanced_prompt(command, selected_7b, state_snapshot)
+        result = await self._call_ollama_v2(selected_7b, enhanced_cmd, timeout=25)  # 放宽timeout到25秒
+        model_used = "7B"
 
         # 3. 处理结果
         if result:
