@@ -1,39 +1,61 @@
-# Logs
-logs
+# ============================================================================
+# Claudia Robot Project - Git Ignore Configuration
+# Updated: 2025-10-31
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# Logs and Debug Files
+# ----------------------------------------------------------------------------
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 dev-debug.log
+test_results_*.json
 
-# Dependency directories
+# ----------------------------------------------------------------------------
+# Dependency Directories
+# ----------------------------------------------------------------------------
 node_modules/
 
-# Environment variables
+# ----------------------------------------------------------------------------
+# Environment Variables
+# ----------------------------------------------------------------------------
 .env
+.env.local
+.env.*.local
 
-# Editor directories and files
-.idea
-.vscode
+# ----------------------------------------------------------------------------
+# Editor Directories and Files
+# ----------------------------------------------------------------------------
+.idea/
+.vscode/
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+*.swp
+*.swo
 
-# OS specific
+# ----------------------------------------------------------------------------
+# OS Specific Files
+# ----------------------------------------------------------------------------
 .DS_Store
+Thumbs.db
+*.bak
 
-# Task files
-# tasks.json
-# tasks/ 
-
-# ROS2 workspace build directories
+# ----------------------------------------------------------------------------
+# ROS2 Workspace Build Directories
+# ----------------------------------------------------------------------------
 cyclonedds_ws/build/
 cyclonedds_ws/install/
 cyclonedds_ws/log/
 
-# Python cache and compiled files
+# ----------------------------------------------------------------------------
+# Python Cache and Compiled Files
+# ----------------------------------------------------------------------------
 __pycache__/
 *.py[cod]
 *$py.class
@@ -51,42 +73,134 @@ parts/
 sdist/
 var/
 wheels/
+pip-wheel-metadata/
+share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
-# Pytest cache
+# ----------------------------------------------------------------------------
+# Testing and Coverage
+# ----------------------------------------------------------------------------
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
+.tox/
+.nox/
+.hypothesis/
+*.cover
+*.py,cover
+.cache
+nosetests.xml
+coverage.xml
+*.coveragerc
 
-# TaskMaster AI generated content (optional)
+# ----------------------------------------------------------------------------
+# TaskMaster AI Generated Content
+# ----------------------------------------------------------------------------
 .taskmaster/generated/
 .taskmaster/reports/task-complexity-report*.json
 
-# Temporary files and downloads
+# ----------------------------------------------------------------------------
+# Temporary Files and Downloads
+# ----------------------------------------------------------------------------
 tmp/
 temp/
 *.tmp
 *.temp
+*.pid
+*.seed
+*.log.*
 
-# Large binary files and datasets
+# ----------------------------------------------------------------------------
+# Large Binary Files and Datasets
+# ----------------------------------------------------------------------------
 *.tar.gz
+*.tar.bz2
 *.zip
+*.7z
 *.deb
 *.pkg
+*.dmg
+*.iso
 
-# IDE specific files
+# ----------------------------------------------------------------------------
+# IDE Specific Files (Extended)
+# ----------------------------------------------------------------------------
 .vscode/settings.json
-.idea/
-*.swp
-*.swo
+.vscode/.ropeproject
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
 
-# Robot logs and data
-logs/
-*.log
+# ----------------------------------------------------------------------------
+# Robot Specific Data
+# ----------------------------------------------------------------------------
+# Robot logs and sensor data
+robot_logs/
+sensor_data/
+*.bag
+*.rosbag
 
-# Third-party dependencies and builds (large directories)
+# Point cloud data
+*.pcd
+*.ply
+
+# Image datasets
+image_data/
+camera_captures/
+
+# ----------------------------------------------------------------------------
+# Third-party Dependencies and Builds (Large Directories)
+# ----------------------------------------------------------------------------
+# DDS and SDK sources (can be re-cloned)
 cyclonedds/
 unitree_sdk2_python/
-cyclonedds_ws/ 
+
+# Full ROS2 workspace (keep source, ignore build artifacts)
+cyclonedds_ws/
+
+# ----------------------------------------------------------------------------
+# Backup and Archive Directories
+# ----------------------------------------------------------------------------
+backups/
+archive/
+old/
+*.backup
+*.old
+
+# ----------------------------------------------------------------------------
+# Documentation Archive (Keep main docs only)
+# ----------------------------------------------------------------------------
+docs/archive/
+
+# ----------------------------------------------------------------------------
+# Git Worktrees
+# ----------------------------------------------------------------------------
+.worktrees/
+
+# ----------------------------------------------------------------------------
+# AI Tool Configuration Directories (Deprecated)
+# ----------------------------------------------------------------------------
+.clinerules/
+.roo/
+.serena/
+.trae/
+.windsurf/
+.github/instructions/
+
+# ----------------------------------------------------------------------------
+# Keep Important Files (Override previous rules)
+# ----------------------------------------------------------------------------
+!.env.example
+!.env.ros2
+!.env.unitree_sdk
+
+# Keep TaskMaster core files
+!.taskmaster/tasks/
+!.taskmaster/config.json
+!.taskmaster/state.json 
