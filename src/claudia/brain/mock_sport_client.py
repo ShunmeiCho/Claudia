@@ -198,11 +198,26 @@ class MockSportClient:
         # type: (list) -> tuple
         """获取当前状态（兼容 SDK GetState 签名）
 
+        Go2 固件要求全 5 键查询: ["state","bodyHeight","footRaiseHeight","speedLevel","gait"]。
+        模拟模式返回合理默认值。
+
         Returns:
             (return_code, state_dict) 元组，与真实 SDK 返回格式一致。
-            P0-5 连通性检查依赖此签名：GetState(["mode"])
         """
-        state = {"mode": self.current_state}
+        # 将内部 current_state 字符串转为整数模式码
+        state_mode_map = {"standing": 1, "idle": 0, "walking": 2, "damped": 0}
+        mode_int = state_mode_map.get(self.current_state, 0)
+
+        # 模拟完整 GetState 返回（与真实 Go2 固件格式一致）
+        full_state = {
+            "state": mode_int,
+            "bodyHeight": 0.0,
+            "footRaiseHeight": 0.09,
+            "speedLevel": 0,
+            "gait": 0,
+        }
         if keys:
-            state = {k: state.get(k) for k in keys}
+            state = {k: full_state.get(k) for k in keys}
+        else:
+            state = full_state
         return 0, state

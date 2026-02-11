@@ -33,7 +33,9 @@ _ACTIONS = [
     ActionDef(1004, "StandUp",        "立ちます"),
     ActionDef(1005, "StandDown",      "伏せます"),
     ActionDef(1006, "RecoveryStand",  "回復します"),
-    ActionDef(1009, "Sit",            "座ります"),
+    # Sit 需要站立前置（策略约束）:
+    # 在不可信状态下会自动前插 StandUp，避免从未知姿态直接执行 Sit。
+    ActionDef(1009, "Sit",            "座ります",     requires_standing=True),
     ActionDef(1010, "RiseSit",        "起き上がります"),
 
     # --- 表演动作（无参数，需站立的标注）---

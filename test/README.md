@@ -22,6 +22,7 @@ test/
 │   ├── test_basic_control_commands.py  # 基础控制命令测试
 │   ├── test_communication_performance.py # 通信性能测试 (任务3.7)
 │   └── test_*.py            # 其他硬件测试文件
+├── test_claudia_llm_performance.py     # LLM性能测试 (任务11)
 └── utils/                   # 测试工具
     ├── __init__.py
     └── test_helpers.py      # 测试辅助函数
@@ -44,6 +45,7 @@ python3 test/run_tests.py --type integration
 ### 运行单个测试文件
 ```bash
 python3 test/hardware/test_unitree_connection.py
+python3 test/test_claudia_llm_performance.py --model claudia-v3.2:3b
 ```
 
 ## 🤖 硬件测试详细说明
@@ -72,6 +74,38 @@ python3 test/hardware/test_communication_performance.py
 - 使用最小化的安全命令进行测试
 - 机器人保持静止状态，仅测试通信延迟
 - 不执行可能导致机器人移动的动作
+
+### 任务11: LLM性能测试
+**文件**: `test/test_claudia_llm_performance.py`
+**目标**: 评估Claudia机器人日语命令处理LLM模型的准确率和响应性能
+
+**运行方式**:
+```bash
+# 单模型测试
+python3 test/test_claudia_llm_performance.py --model claudia-v3.2:3b
+
+# 多模型对比测试
+python3 test/test_claudia_llm_performance.py --compare claudia-v3.1:3b claudia-v3.2:3b
+```
+
+**测试内容**:
+- 🎯 **准确率测试**: 19种日语命令的识别准确率
+- ⚡ **响应时间测试**: 各类命令的处理延迟统计
+- 🔍 **边界情况测试**: 空输入、英语、复合命令等处理
+- 📊 **分类性能分析**: 基本动作、紧急命令、表演动作、状态查询
+- 💾 **详细报告生成**: JSON格式的完整测试结果
+
+**测试类别**:
+- **basic**: 基本动作 (座る、立つ、歩く、回る)
+- **emergency**: 紧急命令 (停止、ストップ、ダンプ)
+- **performance**: 表演动作 (ダンス、挨拶、ストレッチ)
+- **status**: 状态查询 (状態、バランス)
+- **variant**: 表达变体 (お座り、起立、前進、ハロー)
+
+**期望性能指标**:
+- 总体准确率: ≥90%
+- 平均响应时间: ≤2秒
+- 紧急命令准确率: 100%
 
 ### 其他硬件测试
 

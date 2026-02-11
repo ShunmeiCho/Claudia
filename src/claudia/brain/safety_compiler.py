@@ -10,7 +10,7 @@ pipeline:
   1. 白名单校验 — 非法 api_code 直接拒绝
   2. 高风险策略门控 — allow_high_risk=False 时无条件拒绝 HIGH_ENERGY_ACTIONS
   3. 电量门控 — <=0.10: 仅安全动作, <=0.20: 禁高能, <=0.30: 高能降级为 Dance
-  4. 站立前置 — 需站立但未站立 → 自动前插 StandUp(1004)
+  4. 站立前置 — 需站立但未站立 → 按需插入 StandUp(1004)（支持序列中间插入）
   5. 序列截断 — 序列中首拒=整段拒，中拒=截断，降级=替换
 
 注意:
@@ -47,6 +47,15 @@ class SafetyCompiler:
 
     # 安全动作白名单（极低电量时允许）
     SAFE_ACTIONS = frozenset([1001, 1002, 1003, 1004, 1005, 1006, 1009, 1010])
+    # 会改变姿态状态的动作（用于序列内虚拟姿态推进）
+    # True=执行后站立, False=执行后非站立
+    POSTURE_TRANSITIONS = {
+        1004: True,   # StandUp
+        1006: True,   # RecoveryStand
+        1010: True,   # RiseSit
+        1005: False,  # StandDown
+        1009: False,  # Sit
+    }
 
     def __init__(self, downgrade_target=1023, snapshot_max_age=5.0,
                  allow_high_risk=False):
@@ -127,6 +136,9 @@ class SafetyCompiler:
                         return verdict
 
         # === Step 1-5: 逐项编译 ===
+        # 关键: 序列内姿态会变化，不能仅用输入 is_standing 一次判断。
+        # virtual_standing 在每个动作后根据 POSTURE_TRANSITIONS 推进。
+        virtual_standing = bool(is_standing)
         for api_code in actions:
             # Step 1: 白名单
             if api_code not in EXECUTABLE_API_CODES:
@@ -192,22 +204,29 @@ class SafetyCompiler:
                 )
                 api_code = self.downgrade_target
 
-            # Step 4: 站立前置
-            if api_code in REQUIRE_STANDING and not is_standing:
-                if (1004 not in verdict.auto_prepend
-                        and 1004 not in verdict.executable_sequence):
-                    verdict.auto_prepend.append(1004)
-                    verdict.warnings.append(
-                        "自动前插 StandUp(1004): {} 需要站立".format(api_code)
-                    )
+            # Step 4: 站立前置（序列内按需插入）
+            if api_code in REQUIRE_STANDING and not virtual_standing:
+                # 避免紧邻重复插入 StandUp
+                if not verdict.executable_sequence or verdict.executable_sequence[-1] != 1004:
+                    insert_at_head = len(verdict.executable_sequence) == 0
+                    verdict.executable_sequence.append(1004)
+                    # 兼容旧字段：只有头部插入计入 auto_prepend
+                    if insert_at_head and 1004 not in verdict.auto_prepend:
+                        verdict.auto_prepend.append(1004)
+                        verdict.warnings.append(
+                            "自动前插 StandUp(1004): {} 需要站立".format(api_code)
+                        )
+                    elif not insert_at_head:
+                        verdict.warnings.append(
+                            "序列中插入 StandUp(1004): {} 需要站立".format(api_code)
+                        )
+                virtual_standing = True
 
             verdict.executable_sequence.append(api_code)
 
-        # === 合并: auto_prepend + executable ===
-        if verdict.auto_prepend:
-            verdict.executable_sequence = (
-                verdict.auto_prepend + verdict.executable_sequence
-            )
+            # 序列姿态推进：让后续动作使用“执行后”姿态判断
+            if api_code in self.POSTURE_TRANSITIONS:
+                virtual_standing = self.POSTURE_TRANSITIONS[api_code]
 
         return verdict
 

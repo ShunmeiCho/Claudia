@@ -34,6 +34,25 @@ dependencies = [
     "asyncio-mqtt>=0.11.0",
     "pyserial>=3.5",
     
+    # FastAPI and API service dependencies
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "pydantic>=2.5.0",
+    "aiofiles>=23.0.0",
+    "python-multipart>=0.0.6",  # For form data handling
+    "sse-starlette>=1.6.0",  # For Server-Sent Events
+    
+    # Caching and performance
+    "cachetools>=5.3.0",
+    "aiocache>=0.12.0",
+    "redis>=5.0.0",
+    
+    # Monitoring and observability  
+    "prometheus-client>=0.19.0",
+    
+    # HTTP client
+    "httpx>=0.25.0",
+    
     # Utilities
     "pyyaml>=5.4.0",
     "dataclasses-json>=0.5.0",

@@ -95,6 +95,44 @@ class ProductionCommander:
                 print(f"   → {response}")
         print("="*40 + "\n")
     
+    async def _warmup_model(self):
+        """预热 LLM 模型 — 直接调用 Ollama API 将模型加载到 GPU 显存
+
+        不走 process_command 管线（会命中 hot_cache 绕过 LLM）。
+        发送一个极短的推理请求，触发 Ollama 将模型权重加载到显存。
+        """
+        print("🔄 预热模型中...")
+        try:
+            import ollama as _ollama
+            model_name = self.brain.model_7b
+
+            def _sync_warmup():
+                return _ollama.chat(
+                    model=model_name,
+                    messages=[{'role': 'user', 'content': 'hi'}],
+                    format='json',
+                    options={
+                        'num_predict': 1,   # 只生成1个token，最小开销
+                        'num_ctx': 256,
+                    },
+                    keep_alive='30m',
+                )
+
+            loop = asyncio.get_event_loop()
+            start = time.time()
+            await asyncio.wait_for(
+                loop.run_in_executor(None, _sync_warmup),
+                timeout=60  # 冷加载可能需要较长时间
+            )
+            elapsed = (time.time() - start) * 1000
+            print("✅ 模型就绪 ({}: {:.0f}ms)".format(model_name, elapsed))
+        except ImportError:
+            print("⚠️ ollama 库不可用，跳过预热")
+        except asyncio.TimeoutError:
+            print("⚠️ 模型预热超时 (60s)，继续启动")
+        except Exception as e:
+            print("⚠️ 模型预热失败: {}，继续启动".format(e))
+
     async def process_command(self, command: str):
         """处理单个命令"""
         if command.startswith("/"):
@@ -160,10 +198,11 @@ class ProductionCommander:
         """运行主循环"""
         self.print_header()
         
-        # 预热模型
-        print("🔄 预热模型中...")
-        await self.brain.process_command("hello")
-        print("✅ 模型就绪\n")
+        # 预热模型: 直接调用 Ollama API 将模型加载到 GPU 显存
+        # 注意: 不能用 process_command("hello") — "hello" 命中 hot_cache，
+        # 会跳过 LLM 推理，模型不会被加载到显存中
+        await self._warmup_model()
+        print("")
         
         # 主循环
         while self.running:

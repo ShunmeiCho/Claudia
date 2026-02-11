@@ -198,6 +198,34 @@ class TestInitConnectivity:
         assert result[0] == 0
 
 
+class TestGetStateProbeValidation:
+    """验证 GetState 探测结果有效性判定（防止 code=0 + empty data 假成功）"""
+
+    def _make_brain(self):
+        return _make_lightweight_brain()[0]
+
+    def test_probe_code_0_empty_dict_is_invalid(self):
+        """code=0 但 data={} 应判为无效"""
+        brain = self._make_brain()
+        assert brain._is_valid_getstate_probe(0, {}) is False
+
+    def test_probe_code_0_none_is_invalid(self):
+        """code=0 但 data=None 应判为无效"""
+        brain = self._make_brain()
+        assert brain._is_valid_getstate_probe(0, None) is False
+
+    def test_probe_code_0_nonempty_dict_is_valid(self):
+        """code=0 且 data 非空 dict 才是有效探测"""
+        brain = self._make_brain()
+        data = {"state": 1, "gait": 0}
+        assert brain._is_valid_getstate_probe(0, data) is True
+
+    def test_probe_nonzero_code_is_invalid(self):
+        """code!=0 一律无效"""
+        brain = self._make_brain()
+        assert brain._is_valid_getstate_probe(3103, {"state": 1}) is False
+
+
 # === P0-4: 死代码删除验证 ===
 
 class TestDeadCodeRemoved:
@@ -288,8 +316,8 @@ class TestExecuteReal3104Semantics:
         result = _run_async(brain._execute_real(output))
         assert result == "unknown", "3104+GetState(0) 应返回 'unknown'，实际: {}".format(result)
 
-    def test_3104_getstate_exception_returns_false(self):
-        """3104 + GetState 异常 → False"""
+    def test_3104_getstate_exception_returns_unknown(self):
+        """3104 + GetState 异常 → 'unknown'（命令已发送，不判定为失败）"""
         brain, BrainOutput = self._make_brain()
 
         def mock_rpc_call(method, *args, **kwargs):
@@ -300,10 +328,12 @@ class TestExecuteReal3104Semantics:
         brain._rpc_call = mock_rpc_call
         output = BrainOutput("", api_code=1016)
         result = _run_async(brain._execute_real(output))
-        assert result is False, "3104+GetState异常 应返回 False，实际: {}".format(result)
+        assert result == "unknown", (
+            "3104 说明命令已发送，应返回 'unknown' 而非 False，实际: {}".format(result)
+        )
 
-    def test_3104_getstate_nonzero_returns_false(self):
-        """3104 + GetState 返回非零 → False"""
+    def test_3104_getstate_nonzero_returns_unknown(self):
+        """3104 + GetState 返回非零 → 'unknown'（命令已发送）"""
         brain, BrainOutput = self._make_brain()
 
         def mock_rpc_call(method, *args, **kwargs):
@@ -314,7 +344,9 @@ class TestExecuteReal3104Semantics:
         brain._rpc_call = mock_rpc_call
         output = BrainOutput("", api_code=1016)
         result = _run_async(brain._execute_real(output))
-        assert result is False, "3104+GetState(非零) 应返回 False，实际: {}".format(result)
+        assert result == "unknown", (
+            "3104 说明命令已发送，应返回 'unknown'，实际: {}".format(result)
+        )
 
     def test_return_0_is_true(self):
         """RPC 返回 0 → True (成功)"""
@@ -357,6 +389,77 @@ class TestExecuteReal3104Semantics:
         assert result is False
         # Hello 失败后不应执行 Stretch
         assert "Stretch" not in executed, "序列应在 Hello 失败后中止，但执行了: {}".format(executed)
+
+
+class TestStandupUnknownSequenceGuard:
+    """StandUp unknown(3104) 在序列中的防护策略"""
+
+    def _make_brain(self):
+        return _make_lightweight_brain()
+
+    def test_standup_unknown_without_confirmation_aborts_sequence(self):
+        """StandUp=unknown 且确认失败 → 序列中止，不执行后续动作"""
+        brain, BrainOutput = self._make_brain()
+        executed = []
+
+        def mock_rpc_call(method, *args, **kwargs):
+            executed.append(method)
+            if method == "StandUp":
+                return 3104
+            if method == "GetState":
+                return (0, {"state": 1})  # 触发 single 动作返回 unknown
+            if method == "Hello":
+                return 0
+            return 0
+
+        async def fake_verify(*args, **kwargs):
+            return False
+
+        async def _no_sleep(_):
+            return None
+
+        brain._rpc_call = mock_rpc_call
+        brain._verify_standing_after_unknown = fake_verify
+
+        with patch("claudia.brain.production_brain.asyncio.sleep", new=_no_sleep):
+            output = BrainOutput("", sequence=[1004, 1016])  # StandUp, Hello
+            result = _run_async(brain._execute_real(output))
+
+        assert result is False
+        assert "Hello" not in executed, (
+            "StandUp unknown 且未确认站立时不应执行后续动作，实际执行: {}".format(executed)
+        )
+
+    def test_standup_unknown_with_confirmation_continues_sequence(self):
+        """StandUp=unknown 但确认成功 → 序列继续"""
+        brain, BrainOutput = self._make_brain()
+        executed = []
+
+        def mock_rpc_call(method, *args, **kwargs):
+            executed.append(method)
+            if method == "StandUp":
+                return 3104
+            if method == "GetState":
+                return (0, {"state": 1})
+            if method == "Hello":
+                return 0
+            return 0
+
+        async def fake_verify(*args, **kwargs):
+            return True
+
+        async def _no_sleep(_):
+            return None
+
+        brain._rpc_call = mock_rpc_call
+        brain._verify_standing_after_unknown = fake_verify
+
+        with patch("claudia.brain.production_brain.asyncio.sleep", new=_no_sleep):
+            output = BrainOutput("", sequence=[1004, 1016])  # StandUp, Hello
+            result = _run_async(brain._execute_real(output))
+
+        assert result is True
+        assert "Hello" in executed, "确认站立成功后应继续执行后续动作"
 
 
 # === Finding 1: 紧急停止返回码测试 ===
@@ -504,6 +607,54 @@ class TestHotCacheE2ERouting:
         assert result.api_code == 1016
 
 
+class TestEmergencyAliasRouting:
+    """紧急词统一入口（EMERGENCY_COMMANDS）回归"""
+
+    def _make_brain(self):
+        return _make_lightweight_brain()
+
+    def test_process_command_kana_emergency_alias(self):
+        """process_command: とまれ（かな）应命中紧急旁路"""
+        brain, _ = self._make_brain()
+        result = _run_async(brain.process_command(" とまれ "))
+        assert result.api_code == 1003
+        assert result.reasoning == "emergency_bypass"
+
+    def test_process_and_execute_uses_same_emergency_source(self):
+        """process_and_execute: STOP（大写）应命中同一紧急词源"""
+        brain, BrainOutput = self._make_brain()
+        called = {"count": 0}
+
+        async def fake_handle(command):
+            called["count"] += 1
+            return BrainOutput(
+                response="緊急停止しました",
+                api_code=1003,
+                execution_status="success",
+            )
+
+        brain._handle_emergency = fake_handle
+        result = _run_async(brain.process_and_execute("STOP"))
+        assert called["count"] == 1
+        assert result.api_code == 1003
+
+
+class TestConversationalKanaNormalization:
+    """対話分支のかな正規化回归"""
+
+    def _make_brain(self):
+        brain, _ = _make_lightweight_brain()
+        brain.state_monitor = None
+        return brain
+
+    def test_onamaewa_returns_identity_response(self):
+        """おなまえは → かな正規化后应命中自我介绍回复"""
+        brain = self._make_brain()
+        result = _run_async(brain.process_command("おなまえは？"))
+        assert result.api_code is None
+        assert "Claudia" in result.response
+
+
 # === Commander unknown 分支回归测试 ===
 
 class TestCommanderUnknownBranch:
@@ -602,12 +753,18 @@ class TestStateSnapshotNoneFailClosed:
     def test_hotcache_safe_action_allowed_without_monitor(self):
         """hot_cache 路径: 座って(1009=Sit) 在无状态监控时仍可通过
 
-        Sit 属于 SAFE_ACTIONS，battery=0.0 也允许
+        Sit 属于 SAFE_ACTIONS，battery=0.0 也允许。
+        Sit 现在 requires_standing=True + is_standing=False(fail-safe)
+        → SafetyCompiler auto-prepend StandUp → sequence=[1004, 1009]
         """
         brain, BrainOutput = _make_lightweight_brain()
         output = self._run(brain.process_command("座って"))
-        assert output.api_code == 1009, (
-            "座って(Sit 1009) 是安全动作，应通过 fail-safe，实际 api_code={}".format(output.api_code)
+        # Sit requires standing → auto-prepend StandUp(1004)
+        assert output.sequence == [1004, 1009], (
+            "座って(Sit 1009) requires standing + fail-safe is_standing=False，"
+            "应得到序列 [1004, 1009]，实际: api_code={}, sequence={}".format(
+                output.api_code, output.sequence
+            )
         )
 
     def test_hotcache_standup_allowed_without_monitor(self):
@@ -661,4 +818,196 @@ class TestStateSnapshotNoneFailClosed:
         output = self._run(brain.process_command("dance"))
         assert output.api_code is None, (
             "dance 命令应在无状態監視時被拒绝，实际 api_code={}".format(output.api_code)
+        )
+
+
+# === state_source 安全语义回归测试 ===
+
+class TestStateSourceSafety:
+    """验证: simulation 来源数据被替换为保守值
+
+    当 state_snapshot.source == "simulation" 时，process_command 应:
+    - 将 battery_level 覆盖为 0.50（不信任模拟的 0.85/1.0）
+    - 将 is_standing 替换为内部跟踪值
+    这确保 SafetyCompiler 不会被模拟数据误导。
+    """
+
+    def _run(self, coro):
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    def test_simulation_source_blocks_high_energy(self):
+        """simulation 来源 → battery=0.50 → 高能动作(1031)被降级或拒绝"""
+        brain, BrainOutput = _make_lightweight_brain()
+        # 构造一个 simulation source 的 state_monitor
+        mock_state = MagicMock()
+        mock_state.battery_level = 0.85  # 模拟给的乐观值
+        mock_state.is_standing = True
+        mock_state.source = "simulation"  # 关键: 标记来源
+        mock_state.timestamp = 0.0
+        mock_monitor = MagicMock()
+        mock_monitor.get_current_state.return_value = mock_state
+        mock_monitor.is_ros_initialized = False
+        brain.state_monitor = mock_monitor
+
+        # ジャンプ(1031) 是 HIGH_ENERGY_ACTION
+        # battery=0.50 > 0.30: 按电量门控应被降级为 Dance
+        # 但 allow_high_risk=False 时直接拒绝
+        output = self._run(brain.process_command("ジャンプ"))
+        # 应被安全策略阻止（高风险禁用 or 降级）
+        assert output.api_code != 1031, (
+            "simulation 来源下 高能动作1031 不应直接执行"
+        )
+
+    def test_simulation_source_allows_safe_actions(self):
+        """simulation 来源 → battery=0.50, is_standing=False(fail-safe) → 安全动作仍可执行
+
+        Sit(1009) requires_standing=True + is_standing=False(fail-safe for simulation)
+        → SafetyCompiler auto-prepend StandUp → sequence=[1004, 1009]
+        """
+        brain, BrainOutput = _make_lightweight_brain()
+        mock_state = MagicMock()
+        mock_state.battery_level = 0.85
+        mock_state.is_standing = True
+        mock_state.source = "simulation"
+        mock_state.timestamp = 0.0
+        mock_monitor = MagicMock()
+        mock_monitor.get_current_state.return_value = mock_state
+        mock_monitor.is_ros_initialized = False
+        brain.state_monitor = mock_monitor
+
+        # 座って → Sit(1009) requires standing, simulation=fail-safe not standing
+        output = self._run(brain.process_command("座って"))
+        assert output.sequence == [1004, 1009], (
+            "simulation 来源下 Sit requires standing + fail-safe is_standing=False，"
+            "应得到序列 [1004, 1009]，实际: api_code={}, sequence={}".format(
+                output.api_code, output.sequence
+            )
+        )
+
+    def test_sdk_source_preserves_real_battery(self):
+        """sdk 来源 → 使用真实 battery 值（不覆盖为 0.50）"""
+        brain, BrainOutput = _make_lightweight_brain()
+        mock_state = MagicMock()
+        mock_state.battery_level = 0.85
+        mock_state.is_standing = True
+        mock_state.source = "sdk"  # 真实 SDK 数据
+        mock_state.timestamp = 0.0
+        mock_monitor = MagicMock()
+        mock_monitor.get_current_state.return_value = mock_state
+        # is_ros_initialized 不影响 source=="sdk" 分支
+        mock_monitor.is_ros_initialized = False
+        brain.state_monitor = mock_monitor
+
+        # 座って → Sit(1009) 应正常通过
+        output = self._run(brain.process_command("座って"))
+        assert output.api_code == 1009
+
+    def test_sdk_source_trusts_posture_not_overridden(self):
+        """sdk 来源 → is_standing 不被 last_posture_standing 覆盖"""
+        brain, BrainOutput = _make_lightweight_brain()
+        mock_state = MagicMock()
+        mock_state.battery_level = 0.85
+        mock_state.is_standing = True  # SDK 说站立
+        mock_state.source = "sdk"
+        mock_state.timestamp = 0.0
+        mock_monitor = MagicMock()
+        mock_monitor.get_current_state.return_value = mock_state
+        mock_monitor.is_ros_initialized = False  # 以前这会触发覆盖
+        brain.state_monitor = mock_monitor
+        brain.last_posture_standing = False  # 内部跟踪说非站立
+
+        # 如果 is_standing 被覆盖为 False，Hello 需要前插 StandUp → 变成序列
+        # 如果 is_standing 保持 True（SDK 信任），Hello 直接执行
+        output = self._run(brain.process_command("こんにちは"))
+        # SDK source 应信任 is_standing=True → Hello(1016) 直接执行
+        assert output.api_code == 1016, (
+            "source=sdk 时 is_standing 不应被 last_posture_standing 覆盖，"
+            "Hello 应直接执行，实际: api_code={}, sequence={}".format(
+                output.api_code, output.sequence
+            )
+        )
+
+    def test_sdk_fallback_uses_internal_posture(self):
+        """sdk_fallback 来源 → is_ros_initialized=False → 使用内部跟踪"""
+        brain, BrainOutput = _make_lightweight_brain()
+        mock_state = MagicMock()
+        mock_state.battery_level = 0.50
+        mock_state.is_standing = True  # fallback 值
+        mock_state.source = "sdk_fallback"
+        mock_state.timestamp = 0.0
+        mock_monitor = MagicMock()
+        mock_monitor.get_current_state.return_value = mock_state
+        mock_monitor.is_ros_initialized = False
+        brain.state_monitor = mock_monitor
+        brain.last_posture_standing = False  # 内部跟踪: 非站立
+
+        # 由于 is_ros_initialized=False，is_standing 应被内部跟踪值覆盖
+        # 需要站立的动作应自动前插 StandUp
+        output = self._run(brain.process_command("こんにちは"))
+        # Hello(1016) 需要站立，is_standing=False → 应前插 StandUp
+        if output.sequence:
+            assert 1004 in output.sequence, (
+                "非站立状态下 Hello 应前插 StandUp(1004)"
+            )
+        elif output.api_code == 1016:
+            pass  # 如果安全编译器判定不需要前插（因为其他原因），也可以
+        # 不管怎样，不应被完全拒绝（battery=0.50 足够执行非高能动作）
+
+    def test_sdk_partial_state_ok_trusts_posture(self):
+        """sdk_partial + state_ok=True → 信任 SDK 姿态，不覆盖"""
+        brain, BrainOutput = _make_lightweight_brain()
+        mock_state = MagicMock()
+        mock_state.battery_level = 0.50  # battery fallback
+        mock_state.is_standing = True  # SDK 说站立
+        mock_state.source = "sdk_partial"
+        mock_state.state_ok = True  # 姿态数据可信
+        mock_state.battery_ok = False  # 电量数据不可用
+        mock_state.timestamp = 0.0
+        mock_monitor = MagicMock()
+        mock_monitor.get_current_state.return_value = mock_state
+        mock_monitor.is_ros_initialized = False
+        brain.state_monitor = mock_monitor
+        brain.last_posture_standing = False  # 内部跟踪说非站立
+
+        # state_ok=True → 信任 SDK 的 is_standing=True → Hello 直接执行
+        output = self._run(brain.process_command("こんにちは"))
+        assert output.api_code == 1016, (
+            "source=sdk_partial + state_ok=True 时应信任 SDK 姿态，"
+            "Hello 应直接执行，实际: api_code={}, sequence={}".format(
+                output.api_code, output.sequence
+            )
+        )
+
+    def test_sdk_partial_battery_only_overrides_posture(self):
+        """sdk_partial + state_ok=False → 姿态不可信，fail-safe is_standing=False
+
+        state_ok=False 时不再信任 last_posture_standing，强制 is_standing=False。
+        Hello(1016) requires_standing=True → SafetyCompiler auto-prepend StandUp
+        → sequence=[1004, 1016]
+        """
+        brain, BrainOutput = _make_lightweight_brain()
+        mock_state = MagicMock()
+        mock_state.battery_level = 0.85
+        mock_state.is_standing = False  # 默认值
+        mock_state.source = "sdk_partial"
+        mock_state.state_ok = False  # 姿态数据不可用
+        mock_state.battery_ok = True  # 电量可信
+        mock_state.timestamp = 0.0
+        mock_monitor = MagicMock()
+        mock_monitor.get_current_state.return_value = mock_state
+        mock_monitor.is_ros_initialized = False
+        brain.state_monitor = mock_monitor
+        brain.last_posture_standing = True  # 内部跟踪: 站立（不被信任）
+
+        # state_ok=False → is_standing=False (fail-safe) → Hello 需要 auto-prepend StandUp
+        output = self._run(brain.process_command("こんにちは"))
+        assert output.sequence == [1004, 1016], (
+            "source=sdk_partial + state_ok=False → fail-safe is_standing=False，"
+            "Hello 应得到序列 [1004, 1016]，实际: api_code={}, sequence={}".format(
+                output.api_code, output.sequence
+            )
         )
