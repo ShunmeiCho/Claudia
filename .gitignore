@@ -1,6 +1,6 @@
 # ============================================================================
 # Claudia Robot Project - Git Ignore Configuration
-# Updated: 2025-10-31
+# Updated: 2026-02-11
 # ============================================================================
 
 # ----------------------------------------------------------------------------
@@ -27,10 +27,11 @@ node_modules/
 .env.*.local
 
 # ----------------------------------------------------------------------------
-# Editor Directories and Files
+# Editor and IDE Directories
 # ----------------------------------------------------------------------------
 .idea/
 .vscode/
+.cursor/
 *.suo
 *.ntvs*
 *.njsproj
@@ -38,6 +39,22 @@ node_modules/
 *.sw?
 *.swp
 *.swo
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# ----------------------------------------------------------------------------
+# AI Tool Configuration Directories
+# ----------------------------------------------------------------------------
+.clinerules/
+.roo/
+.serena/
+.trae/
+.windsurf/
+.github/instructions/
+.taskmaster/
 
 # ----------------------------------------------------------------------------
 # OS Specific Files
@@ -47,11 +64,9 @@ Thumbs.db
 *.bak
 
 # ----------------------------------------------------------------------------
-# ROS2 Workspace Build Directories
+# ROS2 Workspace (keep source, ignore build artifacts)
 # ----------------------------------------------------------------------------
-cyclonedds_ws/build/
-cyclonedds_ws/install/
-cyclonedds_ws/log/
+cyclonedds_ws/
 
 # ----------------------------------------------------------------------------
 # Python Cache and Compiled Files
@@ -98,13 +113,7 @@ coverage.xml
 *.coveragerc
 
 # ----------------------------------------------------------------------------
-# TaskMaster AI Generated Content
-# ----------------------------------------------------------------------------
-.taskmaster/generated/
-.taskmaster/reports/task-complexity-report*.json
-
-# ----------------------------------------------------------------------------
-# Temporary Files and Downloads
+# Temporary Files
 # ----------------------------------------------------------------------------
 tmp/
 temp/
@@ -125,73 +134,38 @@ temp/
 *.pkg
 *.dmg
 *.iso
-
-# ----------------------------------------------------------------------------
-# IDE Specific Files (Extended)
-# ----------------------------------------------------------------------------
-.vscode/settings.json
-.vscode/.ropeproject
-.mypy_cache/
-.dmypy.json
-dmypy.json
-.pyre/
-.pytype/
+*.safetensors
+*.gguf
+*.bin
 
 # ----------------------------------------------------------------------------
 # Robot Specific Data
 # ----------------------------------------------------------------------------
-# Robot logs and sensor data
 robot_logs/
 sensor_data/
 *.bag
 *.rosbag
-
-# Point cloud data
 *.pcd
 *.ply
-
-# Image datasets
 image_data/
 camera_captures/
 
 # ----------------------------------------------------------------------------
-# Third-party Dependencies and Builds (Large Directories)
+# Third-party Dependencies (can be re-cloned)
 # ----------------------------------------------------------------------------
-# DDS and SDK sources (can be re-cloned)
 cyclonedds/
 unitree_sdk2_python/
 
-# Full ROS2 workspace (keep source, ignore build artifacts)
-cyclonedds_ws/
-
 # ----------------------------------------------------------------------------
-# Backup and Archive Directories
+# Backup, Archive, and Worktrees
 # ----------------------------------------------------------------------------
 backups/
 archive/
 old/
 *.backup
 *.old
-
-# ----------------------------------------------------------------------------
-# Documentation Archive (Keep main docs only)
-# ----------------------------------------------------------------------------
 docs/archive/
-
-# ----------------------------------------------------------------------------
-# Git Worktrees
-# ----------------------------------------------------------------------------
 .worktrees/
-
-# ----------------------------------------------------------------------------
-# AI Tool Configuration Directories (Deprecated)
-# ----------------------------------------------------------------------------
-.clinerules/
-.roo/
-.serena/
-.trae/
-.windsurf/
-.github/instructions/
 
 # ----------------------------------------------------------------------------
 # Keep Important Files (Override previous rules)
@@ -199,8 +173,3 @@ docs/archive/
 !.env.example
 !.env.ros2
 !.env.unitree_sdk
-
-# Keep TaskMaster core files
-!.taskmaster/tasks/
-!.taskmaster/config.json
-!.taskmaster/state.json 
