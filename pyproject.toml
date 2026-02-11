@@ -1,7 +1,7 @@
 [project]
 name = "claudia"
 version = "0.1.0"
-description = "Claudia智能四足机器人系统 - 基于Unitree Go2 R&D Plus平台的智能四足机器人"
+description = "LLM-brained AI system for the Unitree Go2 quadruped robot"
 authors = [
     {name = "Claudia Development Team", email = "dev@claudia-robot.com"}
 ]

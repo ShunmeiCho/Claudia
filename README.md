@@ -1,200 +1,335 @@
-# 🤖 Claudia - 智能AI机器人项目
+[English](README.md) | [日本語](README.ja.md) | [中文](README.zh.md)
 
-> **"LLM是机器人Claudia的大脑！"** - 用户的远见成为现实
+# Claudia — LLM-Brained Robot Intelligence
 
-## 🎯 **项目概述**
+[![Python 3.8+](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](https://www.python.org/)
+[![Platform](https://img.shields.io/badge/Platform-Jetson%20Orin%20NX-green.svg)](https://developer.nvidia.com/embedded/jetson-orin)
+[![Robot](https://img.shields.io/badge/Robot-Unitree%20Go2-orange.svg)](https://www.unitree.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Claudia是一个基于**Unitree Go2**机器人的智能AI系统，实现了真正的**LLM大脑驱动**的机器人控制。项目突破了传统关键词映射的限制，让LLM成为机器人的真正大脑，能够理解复杂的自然语言并智能执行动作。
+**Claudia** is an LLM-brained AI system for the **Unitree Go2** quadruped robot. It translates natural language commands in Japanese, Chinese, and English into robot actions through local LLM inference (Qwen2.5-7B on Ollama), running entirely on-device on NVIDIA Jetson Orin NX.
 
-## ✨ **核心特性**
+> *"The LLM is the robot's brain"* — semantic understanding, not keyword matching.
 
-### 🧠 **LLM大脑架构**
-- **语义理解**：理解"可愛い"→比心、"疲れた"→坐下等抽象概念
-- **智能决策**：LLM直接输出API代码，无需二次映射
-- **状态感知**：自动处理动作依赖（如坐立状态下打招呼会先站立）
-- **混合模型**：3B快速响应 + 7B复杂序列 + 缓存层
+---
 
-### 🤖 **硬件控制能力**
-- **15个验证动作**：基础控制8个 + 表演动作4个 + 高级动作3个
-- **实时控制**：响应时间0ms-3秒
-- **状态管理**：智能处理站立/坐下/躺下状态转换
-- **安全机制**：错误检测、自动恢复、优雅降级
+## Key Features
 
-### 🌐 **多语言交互**
-- **日语优先**：完美的日语对话体验
-- **中文支持**：支持中文指令
-- **英文兼容**：基础英文命令
+### LLM Brain Architecture
+- **Semantic Understanding**: Maps abstract concepts to robot actions (e.g., "可愛い" (cute) → Heart gesture, "疲れた" (tired) → Sit down)
+- **Direct API Output**: LLM outputs structured JSON with action codes — no intermediate mapping layer
+- **Single Source of Truth**: All 27 action definitions live in `action_registry.py`; downstream sets (whitelist, standing requirements, method map) are auto-derived
+- **Deterministic Inference**: `temperature=0.0` with JSON mode for consistent behavior
 
-## 🚀 **快速开始**
+### Safety System (SafetyCompiler)
+- **Unified Safety Pipeline**: All action paths go through `SafetyCompiler.compile()` — no bypass possible
+- **3-Tier Battery Gating**: <=10%: safe actions only | <=20%: no high-energy | <=30%: downgrade flips to dance
+- **Standing Prerequisites**: Auto-prepends StandUp when needed (e.g., Hello requires standing)
+- **Virtual Posture Tracking**: Tracks posture changes within action sequences for correct prerequisite insertion
+- **Whitelist Enforcement**: Only registered, enabled actions can execute
 
-### **环境要求**
-- Unitree Go2机器人
-- Ubuntu 20.04 + ROS2 Foxy
-- Jetson Orin NX
-- Python 3.8+
-- Ollama (LLM推理)
+### Hardware Control
+- **15 Validated Actions**: 8 basic postures + 4 performance + 3 advanced (see [Supported Actions](#supported-actions))
+- **Real-Time Control**: 0ms (cached) to ~3s (LLM inference) response time
+- **State-Aware Sequencing**: Automatic action dependency resolution
+- **Graceful Fallback**: Real hardware → Mock simulation, with structured error codes
 
-### **一键启动**
+### Multilingual Interaction
+- **Japanese-Primary**: Natural Japanese conversation with the robot
+- **Chinese Support**: Full Chinese command recognition
+- **English Compatible**: Core English commands supported
+- **ASR Kana Normalization**: Built-in KANA_ALIASES pipeline for speech recognition output cleanup
+
+---
+
+## Quick Start
+
+### Prerequisites
+
+| Component | Requirement |
+|-----------|-------------|
+| Robot | Unitree Go2 (R&D Plus recommended) |
+| Compute | NVIDIA Jetson Orin NX |
+| OS | Ubuntu 20.04 (aarch64) |
+| Python | 3.8+ |
+| LLM Runtime | [Ollama](https://ollama.ai/) |
+| Middleware | ROS2 Foxy + CycloneDDS |
+| Network | Ethernet to robot (`192.168.123.x`) |
+
+### Installation
+
 ```bash
-# 克隆项目
-git clone <repository>
+git clone https://github.com/ShunmeiCho/Claudia.git
 cd claudia
+pip install -e .
 
-# 启动Claudia
+# Set up environment
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export PYTHONPATH=/path/to/unitree_sdk2_python:$PYTHONPATH
+```
+
+### Launch
+
+```bash
+# Interactive launcher (recommended)
 ./start_production_brain.sh
 
-# 选择模式
-# 1) 模拟模式 (安全测试)
-# 2) 真实硬件模式 (连接机器人)
+# Or directly:
+python3 production_commander.py              # Simulation mode
+python3 production_commander.py --hardware   # Real robot
 ```
 
-### **开始对话**
+---
+
+## Usage Examples
+
 ```
-くら> こんにちは     # 打招呼
-くら> 座って         # 坐下
-くら> 比心           # 比心动作
-くら> 前空翻         # 前空翻
-くら> 可愛いね       # 智能理解→比心
-```
-
-## 📊 **支持的动作**
-
-### **基础控制（8个）**
-| 日语 | 中文 | 英文 | API | 动作 |
-|------|------|------|-----|------|
-| 座って | 坐下 | sit | 1009 | 坐下 |
-| 立って | 站立 | stand | 1004 | 站立 |
-| 伏せて | 趴下 | down | 1005 | 趴下 |
-| 止まって | 停止 | stop | 1003 | 停止 |
-
-### **表演动作（4个）**
-| 日语 | 中文 | 英文 | API | 动作 |
-|------|------|------|-----|------|
-| こんにちは | 打招呼 | hello | 1016 | 挥手 |
-| 伸びて | 伸懒腰 | stretch | 1017 | 伸展 |
-| ハート | 比心 | heart | 1036 | 比心 |
-| 擦って | 刮擦 | scrape | 1029 | 刮擦 |
-
-### **高级动作（3个）**
-| 日语 | 中文 | 英文 | API | 动作 |
-|------|------|------|-----|------|
-| 前転 | 前空翻 | frontflip | 1030 | 前空翻 |
-| 前跳 | 前跳 | frontjump | 1031 | 前跳 |
-| 前扑 | 前扑 | frontpounce | 1032 | 前扑 |
-
-## 🏗️ **架构亮点**
-
-### **LLM大脑系统**
-```python
-用户输入: "做个可爱的动作"
-    ↓
-🧠 LLM理解: "可爱" → Heart动作
-    ↓
-🎯 输出JSON: {"response":"ハートします","api_code":1036}
-    ↓
-🤖 执行: client.Heart() → 机器人比心
+Claudia> こんにちは          → Hello gesture (1016)
+Claudia> 座って              → Sit down (1009)
+Claudia> 可愛いね            → Heart gesture (1036) — semantic: "cute" triggers affection
+Claudia> 立ってから挨拶して  → Sequence: StandUp(1004) → Hello(1016)
+Claudia> 疲れた              → Sit down (1009) — semantic: "tired" triggers rest
+Claudia> dance               → Random Dance1(1022) or Dance2(1023)
+Claudia> 量子力学について教えて → Conversational response (no action)
 ```
 
-### **智能状态管理**
-```python
-场景: 机器人坐着，用户说"打招呼"
-    ↓
-🔍 检测: Hello(1016)需要站立状态
-    ↓
-⚡ 自动: 执行StandUp(1004) → 等待1.5秒
-    ↓
-✅ 执行: Hello(1016) → 成功打招呼
+---
+
+## Supported Actions
+
+### Basic Posture (8 actions)
+
+| API Code | Method | Japanese | Chinese | English | Standing Required |
+|----------|--------|----------|---------|---------|:-:|
+| 1001 | Damp | ダンプモード | 阻尼模式 | Damp | - |
+| 1002 | BalanceStand | バランス | 平衡站立 | Balance | - |
+| 1003 | StopMove | 止まる | 停止 | Stop | - |
+| 1004 | StandUp | 立つ | 站立 | Stand Up | - |
+| 1005 | StandDown | 伏せる | 趴下 | Stand Down | - |
+| 1006 | RecoveryStand | 回復 | 恢复站立 | Recovery | - |
+| 1009 | Sit | 座る | 坐下 | Sit | Yes |
+| 1010 | RiseSit | 起き上がる | 起立 | Rise Sit | - |
+
+### Performance (7 actions)
+
+| API Code | Method | Japanese | Chinese | English | Standing Required |
+|----------|--------|----------|---------|---------|:-:|
+| 1016 | Hello | 挨拶 | 打招呼 | Hello | Yes |
+| 1017 | Stretch | 伸び | 伸懒腰 | Stretch | Yes |
+| 1021 | Wallow | 転がる | 翻滚 | Wallow | - |
+| 1022 | Dance1 | ダンス1 | 舞蹈1 | Dance 1 | Yes |
+| 1023 | Dance2 | ダンス2 | 舞蹈2 | Dance 2 | Yes |
+| 1029 | Scrape | 刮る | 刮擦 | Scrape | Yes |
+| 1033 | WiggleHips | 腰振り | 摇臀 | Wiggle Hips | Yes |
+| 1036 | Heart | ハート | 比心 | Heart | Yes |
+
+### Advanced / High-Risk (3 actions)
+
+| API Code | Method | Japanese | Chinese | English | Risk |
+|----------|--------|----------|---------|---------|------|
+| 1030 | FrontFlip | 前転 | 前空翻 | Front Flip | High |
+| 1031 | FrontJump | ジャンプ | 前跳 | Front Jump | High |
+| 1032 | FrontPounce | 飛びかかる | 前扑 | Front Pounce | High |
+
+> High-risk actions are battery-gated and require standing state. Disabled by default (`allow_high_risk=False`).
+
+---
+
+## Architecture
+
+### Command Processing Pipeline
+
+```
+User Input (JA/ZH/EN)
+  |
+  v
+1. Emergency Bypass ........... hardcoded stop commands, ~0ms
+  |
+  v
+2. Hot Cache .................. ~55 cached command->API mappings, ~1ms
+  |                            (cultural terms, kana aliases, core actions)
+  v
+3. Conversational Detection ... greetings/questions -> text-only response
+  |
+  v
+4. LLM Inference .............. Qwen2.5-7B via Ollama, JSON output, ~2-3s
+  |
+  v
+5. SafetyCompiler.compile() ... whitelist -> battery gate -> standing prereq
+  |
+  v
+6. Execute .................... SportClient RPC via CycloneDDS/DDS
 ```
 
-## 📈 **性能指标**
+### Module Overview
 
-| 指标 | 数值 | 说明 |
-|------|------|------|
-| 支持动作 | 15个 | 100%可用 |
-| 缓存命中响应 | 0ms | 即时 |
-| LLM智能响应 | 2-3秒 | 语义理解 |
-| 硬件控制成功率 | 100% | 真实执行 |
-| 状态转换成功率 | 100% | 智能管理 |
+| Module | Responsibility |
+|--------|---------------|
+| `brain/production_brain.py` | Core pipeline: cache -> LLM -> safety -> execution |
+| `brain/action_registry.py` | Single source of truth for all action definitions |
+| `brain/safety_compiler.py` | Unified safety pipeline (battery, standing, whitelist) |
+| `brain/audit_logger.py` | Structured audit trail (`logs/audit/`) |
+| `brain/audit_routes.py` | Canonical route names for audit logging |
+| `brain/sdk_state_provider.py` | Direct SDK state queries (alternative to ROS2 monitor) |
+| `brain/mock_sport_client.py` | Simulates SportClient for testing |
+| `robot_controller/system_state_monitor.py` | ROS2-based battery/posture monitoring at 5Hz |
+| `robot_controller/unified_led_controller.py` | LED mode API (thinking/success/error/listening) |
+| `production_commander.py` | Interactive REPL entry point |
 
-## 🛠️ **技术栈**
+---
 
-### **核心技术**
-- **LLM**: Qwen2.5-3B (Ollama)
-- **机器人**: Unitree Go2 + unitree_sdk2py
-- **通信**: CycloneDDS + ROS2 Foxy
-- **平台**: NVIDIA Jetson Orin NX
+## Speech Recognition (ASR)
 
-### **关键组件**
-- **ProductionBrain**: LLM大脑核心逻辑
-- **SportClient**: 机器人硬件接口
-- **智能缓存**: 高频命令0延迟
-- **状态管理**: 自动处理动作依赖
+> Status: **Foundation Ready** — KANA normalization pipeline integrated, provider protocol planned.
 
-## 🔧 **故障排除**
+### Current State
 
-### **常见问题**
+Input is currently text-based via the interactive REPL (`production_commander.py`). However, the groundwork for speech recognition is in place:
+
+- **KANA_ALIASES Pipeline**: Integrated into the hot cache layer. Normalizes common ASR kana outputs to their kanji equivalents (e.g., `おすわり` → `お座り`, `おて` → `お手`, `はーと` → `ハート`). This eliminates the #1 source of ASR mismatches with Japanese voice commands.
+- **Emergency Command Kana Variants**: `EMERGENCY_COMMANDS` dictionary includes kana-only variants (`とまれ`, `とめて`, `ていし`) ensuring emergency stops work even with imperfect ASR transcription.
+
+### Planned Architecture (PR3)
+
 ```
-Q: 返回3103错误？
-A: APP占用，请关闭APP并重启机器人
-
-Q: 动作不执行？  
-A: 检查API编号，确保使用正确的方法
-
-Q: 连接失败？
-A: 检查网络(192.168.123.x)和CycloneDDS配置
+Microphone
+  |
+  v
+Wake Word Detection (pvporcupine)
+  |
+  v
+ASR Provider (pluggable)
+  |  - Google Speech-to-Text
+  |  - OpenAI Whisper (local, Jetson-optimized)
+  |  - VOSK (fully offline)
+  v
+KANA Normalization (already integrated)
+  |
+  v
+ProductionBrain.process_command()
 ```
 
-### **调试命令**
+The `ASRProvider` abstract base class defines a standard interface for swapping ASR engines without modifying the brain or commander layers. ASR runs in the **commander layer**, feeding transcribed text to the brain.
+
+---
+
+## Text-to-Speech (TTS)
+
+> Status: **Designed** — Architecture defined, implementation planned for PR3.
+
+### Current State
+
+Responses are currently displayed as text in the REPL. The robot responds in Japanese (enforced by `_sanitize_response()` which validates hiragana/katakana/kanji presence).
+
+### Planned Architecture (PR3)
+
+```
+ProductionBrain
+  |
+  v
+BrainOutput.response (Japanese text)
+  |
+  v
+Commander._speak_nonblocking()
+  |  - TTSProvider (pluggable)
+  |    - VOICEVOX (Japanese, high quality)
+  |    - Google TTS
+  |    - gTTS (lightweight)
+  |  - ThreadPoolExecutor (non-blocking)
+  |  - generation_id cancellation
+  v
+Audio Output (speaker)
+```
+
+**Key design principle**: The brain **never** touches TTS. `ProductionBrain` produces `BrainOutput` (text + action code); TTS playback is managed entirely in the commander layer. This ensures:
+- Brain tests don't need TTS mocks
+- TTS failures never block action execution
+- New commands automatically cancel in-progress speech
+
+---
+
+## Tech Stack
+
+| Component | Technology |
+|-----------|-----------|
+| LLM | Qwen2.5-7B via [Ollama](https://ollama.ai/) |
+| Robot | Unitree Go2 + unitree_sdk2_python |
+| Communication | CycloneDDS + ROS2 Foxy |
+| Platform | NVIDIA Jetson Orin NX (aarch64) |
+| Language | Python 3.8.10 |
+| OS | Ubuntu 20.04 |
+| GPU | CUDA 11.4 |
+
+---
+
+## Development
+
+### Install (development mode)
+
 ```bash
-くら> /help     # 查看帮助
-くら> /stats    # 查看系统状态
-くら> /history  # 查看命令历史
+pip install -e ".[dev]"    # Includes pytest, black, flake8, mypy
 ```
 
-## 📚 **文档资源**
+### Test
 
-- `docs/FINAL_BREAKTHROUGH_SUMMARY.md` - 技术突破总结
-- `docs/SDK_LIMITATION_ANALYSIS.md` - SDK限制分析
-- `docs/GO2_SUPPORTED_ACTIONS.md` - 动作兼容性完整列表
-- `README_FINAL_SOLUTION.md` - 详细解决方案
+```bash
+python3 test/run_tests.py                    # All tests
+python3 test/run_tests.py --type unit        # Unit only
+python3 test/run_tests.py --type hardware    # Hardware only
+pytest test/ -v                               # Via pytest
+```
 
-## 🌟 **项目价值**
+### Lint / Format
 
-### **技术创新**
-- 首个LLM大脑驱动的Unitree机器人系统
-- 突破SDK功能限制的创新架构
-- 完整的状态感知和智能序列规划
+```bash
+black --line-length 88 src/
+flake8 src/
+mypy src/
+```
 
-### **实用价值**
-- 生产就绪的机器人控制系统
-- 自然语言交互体验
-- 完整的开发和部署指南
+### LLM Model Management
 
-### **开源贡献**
-- 详细的技术实现文档
-- 可复制的架构设计
-- 完整的问题解决方案
-
-## 📄 **许可证**
-
-MIT License - 详见 LICENSE 文件
-
-## 👥 **贡献者**
-
-- **用户** - 项目愿景和核心洞察
-- **Claude AI** - 技术实现和架构设计
+```bash
+ollama list | grep claudia                   # Check models
+ollama ps                                    # Running models
+curl http://localhost:11434/api/tags         # Ollama health check
+```
 
 ---
 
-## 🎊 **成就里程碑**
+## Troubleshooting
 
-**Claudia项目成功实现了用户的原始愿景：**
-
-> *"让LLM成为机器人的真正大脑，实现真正的智能交互"*
-
-**这不再是科幻，而是现实！** 🚀
+| Problem | Cause | Fix |
+|---------|-------|-----|
+| Error 3103 | Unitree app occupying sport mode | Close the app and restart the robot |
+| DDS connection failed | Wrong network config | Verify `eth0` has `192.168.123.x`, check `RMW_IMPLEMENTATION` |
+| LLM timeout | Model not loaded | Run `ollama list`, check `curl localhost:11434/api/tags` |
+| Import error (unitree_sdk2py) | Missing PYTHONPATH | `export PYTHONPATH=/path/to/unitree_sdk2_python:$PYTHONPATH` |
+| Error 3104 | RPC timeout (async action) | Robot may still be executing; check connectivity |
 
 ---
 
-*最后更新: 2025-09-19*  
-*状态: 生产就绪 ✅*
+## Roadmap
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| PR1 | SafetyCompiler + action_registry + P0 safety fixes | Done |
+| PR2 | Dual-channel LLM (action + voice separation) | Planned |
+| PR3 | ASR/TTS integration (provider protocols) | Designed |
+| P2 | Parameterized actions (Move, Euler, SpeedLevel) | Future |
+| P2 | 3B action-channel A/B testing | Future |
+
+---
+
+## License
+
+MIT License — see [LICENSE](LICENSE) for details.
+
+## Contributors
+
+- **ShunmeiCho** — Project vision and core insights
+- **Claude AI** — Technical implementation and architecture design
+
+---
+
+*Last updated: 2026-02-11*
