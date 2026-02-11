@@ -4,18 +4,34 @@
 Production Brain Fixed - 修复SportClient初始化和提示词问题
 """
 
+import copy
 import json
 import time
 import asyncio
 import logging
 import subprocess
 import random
+import threading
 from typing import Dict, List, Optional, Tuple, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from functools import lru_cache
 
-# Track A新增导入
+from claudia.brain.action_registry import (
+    ACTION_REGISTRY, VALID_API_CODES, EXECUTABLE_API_CODES,
+    REQUIRE_STANDING, HIGH_ENERGY_ACTIONS,
+    METHOD_MAP, ACTION_RESPONSES, SAFE_DEFAULT_PARAMS,
+    get_response_for_action, get_response_for_sequence,
+)
+from claudia.brain.safety_compiler import SafetyCompiler, SafetyVerdict
+from claudia.brain.audit_routes import (
+    ROUTE_EMERGENCY, ROUTE_HOTPATH, ROUTE_HOTPATH_REJECTED,
+    ROUTE_SEQUENCE, ROUTE_DANCE, ROUTE_CONVERSATIONAL,
+    ROUTE_PRECHECK_REJECTED, ROUTE_LLM_7B,
+    ALL_ROUTES,
+)
+
+# 可选依赖导入
 try:
     import ollama  # Python ollama库
     OLLAMA_AVAILABLE = True
@@ -48,23 +64,28 @@ except ImportError:
 class BrainOutput:
     """大脑输出格式"""
     response: str           # 日语TTS回复
-    api_code: Optional[int] # 单个动作API
-    sequence: Optional[List[int]] = None # 动作序列
+    api_code: Optional[int] = None  # 单个动作API
+    sequence: Optional[List[int]] = None  # 动作序列
     confidence: float = 1.0
-    reasoning: str = ""     # 推理过程/拒绝原因（用于审计和调试）
-    success: bool = True    # 执行是否成功（硬件模式）
+    reasoning: str = ""     # 推理过程/路由标记（用于审计和调试）
+    success: bool = True    # 向后兼容（逐步废弃，用 execution_status 代替）
+    execution_status: Optional[str] = None  # "success" | "unknown" | "failed" | None
+    raw_decision: Optional[List[int]] = None  # Shadow 用: 安全编译前的原始 LLM 决策
 
-    def to_dict(self) -> Dict:
+    def to_dict(self):
+        # type: () -> Dict
         """转换为字典"""
         result = {
             "response": self.response,
             "api_code": self.api_code,
-            "success": self.success
+            "success": self.success,
         }
         if self.sequence:
             result["sequence"] = self.sequence
         if self.reasoning:
             result["reasoning"] = self.reasoning
+        if self.execution_status is not None:
+            result["execution_status"] = self.execution_status
         return result
 
 class ProductionBrain:
@@ -74,147 +95,86 @@ class ProductionBrain:
         self.logger = self._setup_logger()
         self.use_real_hardware = use_real_hardware
 
-        # Track A/B模型配置（修复REVIEW：支持环境变量切换）
+        # 统一使用7B模型（支持环境变量切换）
         import os
-        self.model_3b = os.getenv("BRAIN_MODEL_3B", "claudia-go2-3b:v11.3")  # Track A备用（已弃用，用7B）
-        self.model_7b = os.getenv("BRAIN_MODEL_7B", "claudia-go2-7b:v12-simple")  # Track A主力（简化输出）
+        self.model_7b = os.getenv("BRAIN_MODEL_7B", "claudia-go2-7b:v12.2-complete")  # 完整API支持（v12.2新增运动控制）
 
-        # 灰度切流配置（可选）
-        self.ab_test_ratio = float(os.getenv("AB_TEST_RATIO", "0.0"))  # 0.0=全Track A, 1.0=全Track B
-        if self.ab_test_ratio > 0:
-            self.logger.info(f"🔬 A/B测试启用: {self.ab_test_ratio*100:.0f}%流量→Track B")
-
-        self.logger.info(f"📌 3B模型: {self.model_3b}")
-        self.logger.info(f"📌 7B模型: {self.model_7b}")
+        self.logger.info(f"🧠 📌 7B模型: {self.model_7b}")
         
-        # 扩展动作缓存（包含容易出错的命令）
+        # 精简动作缓存（仅保留文化特定词和LLM容易出错的核心命令）
         self.hot_cache = {
-            # 基础命令
-            "お手": {"response": "こんにちは", "api_code": 1016},  # Hello动作代替握手
+            # === 文化特定词（必须保留）===
+            "ちんちん": {"response": "お辞儀します", "api_code": 1016},
+            "ちんちんして": {"response": "お辞儀します", "api_code": 1016},
+            "チンチン": {"response": "お辞儀します", "api_code": 1016},
+            "拜年": {"response": "お辞儀します", "api_code": 1016},
+
+            # === 多语言急停（安全关键）===
+            "止まって": {"response": "止まります", "api_code": 1003},
+            "止まれ": {"response": "止まります", "api_code": 1003},
+            "停止": {"response": "止まります", "api_code": 1003},
+            "停下": {"response": "止まります", "api_code": 1003},
+            "stop": {"response": "止まります", "api_code": 1003},
+            "halt": {"response": "止まります", "api_code": 1003},
+            "ダンプ": {"response": "ダンプモード", "api_code": 1001},  # 紧急阻尼
+            "damp": {"response": "ダンプモード", "api_code": 1001},
+            "阻尼": {"response": "ダンプモード", "api_code": 1001},
+            "バランス": {"response": "バランスします", "api_code": 1002},  # 紧急平衡
+            "balance": {"response": "バランスします", "api_code": 1002},
+            "平衡": {"response": "バランスします", "api_code": 1002},
+
+            # === 核心基础命令 ===
             "座って": {"response": "座ります", "api_code": 1009},
             "おすわり": {"response": "お座りします", "api_code": 1009},
             "立って": {"response": "立ちます", "api_code": 1004},
             "タッテ": {"response": "立ちます", "api_code": 1004},
-            "比心": {"response": "ハートします", "api_code": 1036},  # 修正：使用Heart而不是Wallow
-            "ハート": {"response": "ハートします", "api_code": 1036},  # 修正：使用Heart而不是Wallow
-            "ダンス": {"response": "踊ります", "api_code": 1022},
-            "踊って": {"response": "踊ります", "api_code": 1022},
-            "停止": {"response": "止まります", "api_code": 1003},
-            "止まれ": {"response": "止まります", "api_code": 1003},
+            "伏せる": {"response": "伏せます", "api_code": 1005},
+            "横になる": {"response": "横になります", "api_code": 1005},
+
+            # === 核心表演动作 ===
+            "お手": {"response": "こんにちは", "api_code": 1016},
             "挨拶": {"response": "挨拶します", "api_code": 1016},
             "こんにちは": {"response": "こんにちは", "api_code": 1016},
-            
-            # 修复容易出错的命令
-            "お辞儀": {"response": "お辞儀します", "api_code": 1030},  # 鞠躬
-            "礼": {"response": "お辞儀します", "api_code": 1030},
-            "礼して": {"response": "お辞儀します", "api_code": 1030},
-            "ちんちん": {"response": "お辞儀します", "api_code": 1016},  # 拜年动作用挨拶
-            "ちんちんして": {"response": "お辞儀します", "api_code": 1016},  # 拜年动作变形
-            "チンチン": {"response": "お辞儀します", "api_code": 1016},
-            "拜年": {"response": "お辞儀します", "api_code": 1016},  # 拜年动作用挨拶
-            "お祝い": {"response": "こんにちは", "api_code": 1016},  # 用挨拶代替
-            
-            # 添加更多容易误解的命令
-            "伸懒腰": {"response": "伸びをします", "api_code": 1017},  # 伸展
-            "伸び": {"response": "伸びをします", "api_code": 1017},
-            "ノビ": {"response": "伸びをします", "api_code": 1017},
-            "ストレッチ": {"response": "伸びをします", "api_code": 1017},
-            "倒立": {"response": "倒立します", "api_code": 1031},  # 倒立
-            "サカダチ": {"response": "倒立します", "api_code": 1031},
-            "横になる": {"response": "横になります", "api_code": 1005},  # 趴下
-            "横になって": {"response": "横になります", "api_code": 1005},
-            "翻身": {"response": "ゴロンします", "api_code": 1010},  # 翻身
-            "ゴロン": {"response": "ゴロンします", "api_code": 1010},
-            
-            # 添加测试验证的新动作
-            "前空翻": {"response": "前転します", "api_code": 1030},  # FrontFlip
-            "前跳": {"response": "前跳します", "api_code": 1031},    # FrontJump  
-            "前扑": {"response": "前扑します", "api_code": 1032},    # FrontPounce
-            "刮擦": {"response": "擦ります", "api_code": 1029},      # Scrape
-            
-            # 新发现的支持动作
-            "阻尼": {"response": "ダンプモード", "api_code": 1001},   # Damp
-            "ダンプ": {"response": "ダンプモード", "api_code": 1001},
-            "平衡": {"response": "バランスします", "api_code": 1002}, # BalanceStand
-            "バランス": {"response": "バランスします", "api_code": 1002},
-            "恢复": {"response": "回復します", "api_code": 1006},     # RecoveryStand
-            "回復": {"response": "回復します", "api_code": 1006},
-            "起坐": {"response": "起き上がります", "api_code": 1010},  # RiseSit
-            "起き上がる": {"response": "起き上がります", "api_code": 1010},
-            "舞踊2": {"response": "踊ります2", "api_code": 1023},     # Dance2
-            "ダンス2": {"response": "踊ります2", "api_code": 1023},
-            "摆姿势": {"response": "ポーズします", "api_code": 1028},  # Pose
-            "ポーズ": {"response": "ポーズします", "api_code": 1028},
-            
-            # 日语语义理解缓存 - 扩展可愛い变形
-            "可愛い": {"response": "ハートします", "api_code": 1036},
-            "可愛いね": {"response": "ハートします", "api_code": 1036},
-            "可愛いな": {"response": "ハートします", "api_code": 1036},
-            "可愛いよ": {"response": "ハートします", "api_code": 1036},
-            "可愛いです": {"response": "ハートします", "api_code": 1036},
-            "可愛すぎる": {"response": "ハートします", "api_code": 1036},
-            "かわいい": {"response": "ハートします", "api_code": 1036},
-            "かわいいね": {"response": "ハートします", "api_code": 1036},
-            "かわいいな": {"response": "ハートします", "api_code": 1036},
-            "暗ちゃん可愛い": {"response": "ハートします", "api_code": 1036},
-            "暗ちゃん可愛いね": {"response": "ハートします", "api_code": 1036},
-            "暗ちゃん　可愛いね": {"response": "ハートします", "api_code": 1036},
-            "くらちゃん可愛い": {"response": "ハートします", "api_code": 1036},
-            "疲れた": {"response": "座ります", "api_code": 1009},
-            "元気": {"response": "踊ります", "api_code": 1023},
-            "ジャンプ": {"response": "前跳します", "api_code": 1031},
-            
-            # 英文命令缓存
-            "damp": {"response": "ダンプモード", "api_code": 1001},
-            "balance": {"response": "バランスします", "api_code": 1002},
-            "stop": {"response": "止まります", "api_code": 1003},
-            "stand": {"response": "立ちます", "api_code": 1004},
-            "down": {"response": "伏せます", "api_code": 1005},
-            "recovery": {"response": "回復します", "api_code": 1006},
-            "sit": {"response": "座ります", "api_code": 1009},
-            "rise": {"response": "起き上がります", "api_code": 1010},
             "hello": {"response": "挨拶します", "api_code": 1016},
-            "hi": {"response": "こんにちは", "api_code": 1016},
-            "stretch": {"response": "伸びをします", "api_code": 1017},
-            # 舞蹈动作 - 支持明确选择和随机选择
-            "dance1": {"response": "踊ります1", "api_code": 1022},
-            "dance2": {"response": "踊ります2", "api_code": 1023},
-            "ダンス1": {"response": "踊ります1", "api_code": 1022},
-            "ダンス2": {"response": "踊ります2", "api_code": 1023},
-            "跳舞1": {"response": "踊ります1", "api_code": 1022},
-            "跳舞2": {"response": "踊ります2", "api_code": 1023},
-            "舞蹈1": {"response": "踊ります1", "api_code": 1022},
-            "舞蹈2": {"response": "踊ります2", "api_code": 1023},
-            # dance/ダンス将在special_处理中随机选择
-            "scrape": {"response": "擦ります", "api_code": 1029},
-            "heart": {"response": "ハートします", "api_code": 1036},
-            "pose": {"response": "ポーズします", "api_code": 1028},
-            "jump": {"response": "前跳します", "api_code": 1031},
-            "flip": {"response": "前転します", "api_code": 1030},
-            "pounce": {"response": "前扑します", "api_code": 1032},
-            "cute": {"response": "ハートします", "api_code": 1036},
-            "tired": {"response": "座ります", "api_code": 1009},
-            
-            # 动作变形缓存（して后缀）
-            "座って": {"response": "座ります", "api_code": 1009},
-            "立って": {"response": "立ちます", "api_code": 1004},
-            "挨拶して": {"response": "挨拶します", "api_code": 1016},
-            "ダンス1して": {"response": "踊ります1", "api_code": 1022},
-            "ダンス2して": {"response": "踊ります2", "api_code": 1023},
-            "ジャンプして": {"response": "前跳します", "api_code": 1031},
-            "ハートして": {"response": "ハートします", "api_code": 1036},
-            "ストレッチして": {"response": "伸びをします", "api_code": 1017},
-            
-            # 常见复杂序列缓存
-            "座ってから挨拶": {"response": "座って挨拶します", "sequence": [1009, 1004, 1016]},
-            # 序列中的舞蹈使用Dance2作为默认，也可明确指定
-            "座ってからダンス": {"response": "座って踊ります", "sequence": [1009, 1004, 1023]},
-            "座ってからダンス1": {"response": "座って踊ります1", "sequence": [1009, 1004, 1022]},
-            "座ってからダンス2": {"response": "座って踊ります2", "sequence": [1009, 1004, 1023]},
-            "挨拶してからダンス": {"response": "挨拶してから踊ります", "sequence": [1016, 1023]},
-            "挨拶したらダンス": {"response": "挨拶してから踊ります", "sequence": [1016, 1023]},
-            "挨拶してからダンス1": {"response": "挨拶してから踊ります1", "sequence": [1016, 1022]},
-            "挨拶したらダンス1": {"response": "挨拶してから踊ります1", "sequence": [1016, 1022]},
+            "ストレッチ": {"response": "伸びをします", "api_code": 1017},
+            "伸び": {"response": "伸びをします", "api_code": 1017},
+            "ダンス": {"response": "踊ります", "api_code": 1022},
+            "踊って": {"response": "踊ります", "api_code": 1022},
+            "ハート": {"response": "ハートします", "api_code": 1036},
+            "比心": {"response": "ハートします", "api_code": 1036},
+
+            # === 友好问候 → Hello(1016) ===
+            "おはよう": {"response": "おはようございます！挨拶します", "api_code": 1016},
+            "おはようございます": {"response": "おはようございます！挨拶します", "api_code": 1016},
+            "こんばんは": {"response": "こんばんは！挨拶します", "api_code": 1016},
+            "こんばんわ": {"response": "こんばんは！挨拶します", "api_code": 1016},
+            "さようなら": {"response": "さようなら！またね。", "api_code": 1016},
+            "おやすみ": {"response": "おやすみなさい！", "api_code": 1016},
+            "おやすみなさい": {"response": "おやすみなさい！", "api_code": 1016},
+            "good morning": {"response": "Good morning! 挨拶します", "api_code": 1016},
+            "good evening": {"response": "Good evening! 挨拶します", "api_code": 1016},
+            "good night": {"response": "Good night! 挨拶します", "api_code": 1016},
+            "goodbye": {"response": "Goodbye! またね。", "api_code": 1016},
+            "bye": {"response": "Goodbye! またね。", "api_code": 1016},
+            "早上好": {"response": "早上好！挨拶します", "api_code": 1016},
+            "晚上好": {"response": "晚上好！挨拶します", "api_code": 1016},
+            "晚安": {"response": "晚安！", "api_code": 1016},
+            "再见": {"response": "再见！またね。", "api_code": 1016},
+
+            # === 褒め言葉 → Heart(1036) ===
+            "かわいい": {"response": "ありがとう！ハートします", "api_code": 1036},
+            "可愛い": {"response": "ありがとう！ハートします", "api_code": 1036},
+            "すごい": {"response": "ありがとう！ハートします", "api_code": 1036},
+            "凄い": {"response": "ありがとう！ハートします", "api_code": 1036},
+            "いい子": {"response": "ありがとう！ハートします", "api_code": 1036},
+            "可爱": {"response": "ありがとう！ハートします", "api_code": 1036},
+            "cute": {"response": "ありがとう！ハートします", "api_code": 1036},
+
+            # === 特例词（容易误解）===
+            "お辞儀": {"response": "お辞儀します", "api_code": 1016},  # 鞠躬/拜年用Hello而非前空翻
+            "礼": {"response": "お辞儀します", "api_code": 1016},
+            "ジャンプ": {"response": "前跳します", "api_code": 1031},
+            "ポーズ": {"response": "ポーズします", "api_code": 1028},
         }
         
         # 复杂序列检测关键词 - 扩展日语连接词
@@ -242,11 +202,10 @@ class ProductionBrain:
         
         # 机器人状态管理
         self.robot_state = "unknown"  # unknown, standing, sitting, lying
-        self.actions_need_standing = [
-            1016, 1017, 1022, 1023, 1029, 1030, 1031, 1032, 1036  # 修正：1036是真正的比心
-        ]
+        # 站立前置列表已迁移至 action_registry.REQUIRE_STANDING，
+        # SafetyCompiler 在 compile() 中自动处理。
 
-        # Track A新增：状态监控器
+        # 状态监控器
         self.state_monitor = None
         if STATE_MONITOR_AVAILABLE:
             try:
@@ -264,15 +223,28 @@ class ProductionBrain:
         else:
             self.logger.warning("⚠️ 状态监控器模块不可用")
 
-        # Track A新增：安全验证器
+        # 安全验证器（旧，deprecated — 保留供其他模块引用）
         if SAFETY_VALIDATOR_AVAILABLE:
-            self.safety_validator = get_safety_validator(enable_high_risk=False)  # Track A初期禁用高风险
-            self.logger.info("✅ 安全验证器已加载（高风险动作已禁用）")
+            self.safety_validator = get_safety_validator(enable_high_risk=False)
         else:
             self.safety_validator = None
-            self.logger.warning("⚠️ 安全验证器不可用")
 
-        # Track A新增：审计日志器（用于A/B决策和回滚）
+        # 安全编译器（新，统一安全管线）
+        allow_high_risk = os.getenv("SAFETY_ALLOW_HIGH_RISK", "0") == "1"
+        self.safety_compiler = SafetyCompiler(allow_high_risk=allow_high_risk)
+        if allow_high_risk:
+            self.logger.warning("!! SAFETY_ALLOW_HIGH_RISK=1: 高风险动作已启用 !!")
+        else:
+            self.logger.info("SafetyCompiler 已加载（高风险动作已禁用）")
+
+        # RPC 锁（SportClient 非线程安全，所有 RPC 调用必须通过 _rpc_call）
+        self._rpc_lock = threading.RLock()
+        self._current_timeout = 10.0  # 跟踪当前 SDK 超时值
+
+        # 命令级串行锁（PR1 引入框架，PR2 强制迁移调用方）
+        self._command_lock = asyncio.Lock()
+
+        # 审计日志器
         if AUDIT_LOGGER_AVAILABLE:
             self.audit_logger = get_audit_logger()
             self.logger.info("✅ 审计日志器已启动 (logs/audit/)")
@@ -285,8 +257,6 @@ class ProductionBrain:
         self.last_executed_api = None       # 最后执行的API代码
 
         self.logger.info("🧠 生产大脑初始化完成")
-        self.logger.info(f"   3B模型: {self.model_3b}")
-        self.logger.info(f"   7B模型: {self.model_7b}")
         self.logger.info(f"   硬件模式: {'真实' if use_real_hardware else '模拟'}")
     
     def _setup_logger(self) -> logging.Logger:
@@ -346,10 +316,13 @@ class ProductionBrain:
             import time
             time.sleep(0.5)  # 给DDS一点时间建立连接
             
-            # 测试连接
+            # P0-5: 使用只读 API 测试连接（不再触发运动）
             try:
-                # 使用RecoveryStand测试连接
-                test_result = self.sport_client.RecoveryStand()
+                try:
+                    test_result, _ = self.sport_client.GetState(["mode"])
+                except Exception:
+                    # 固件兼容 fallback: 无参数 GetState
+                    test_result, _ = self.sport_client.GetState([])
                 
                 # 分析返回码
                 if test_result == 0:
@@ -415,6 +388,116 @@ class ProductionBrain:
             self.sport_client = None
             self.use_real_hardware = False
     
+    def _rpc_call(self, method_name, *args, **kwargs):
+        """统一 RPC 包装 — 所有 SportClient 调用必须通过此方法
+
+        特性:
+          - RLock 保证线程安全（支持同一线程嵌套调用）
+          - 栈式超时保存/恢复（timeout_override 不污染全局状态）
+          - 异常安全：即使 SetTimeout 失败也能恢复跟踪值
+
+        Args:
+            method_name: SportClient 方法名（如 "StandUp", "Dance1"）
+            *args: 方法参数
+            **kwargs: timeout_override=float 可临时覆盖超时
+        """
+        timeout_override = kwargs.pop("timeout_override", None)
+        with self._rpc_lock:
+            previous_timeout = self._current_timeout
+            timeout_changed = False
+            if timeout_override is not None:
+                try:
+                    self.sport_client.SetTimeout(timeout_override)
+                    self._current_timeout = timeout_override
+                    timeout_changed = True
+                except Exception:
+                    pass  # SetTimeout 失败则保持原超时
+            try:
+                method = getattr(self.sport_client, method_name)
+                return method(*args)
+            finally:
+                if timeout_changed:
+                    try:
+                        self.sport_client.SetTimeout(previous_timeout)
+                        self._current_timeout = previous_timeout
+                    except Exception:
+                        # SDK 恢复失败，至少保持跟踪值一致
+                        self._current_timeout = previous_timeout
+
+    # === 紧急停止关键词（检查在获取锁之前）===
+    EMERGENCY_KEYWORDS = frozenset([
+        "止まれ", "止めて", "停止", "stop", "halt", "emergency",
+        "緊急停止", "やめて", "ストップ",
+    ])
+
+    async def process_and_execute(self, command):
+        # type: (str) -> BrainOutput
+        """原子化命令处理+执行入口（PR1 引入框架，PR2 迁移调用方）
+
+        紧急指令绕过锁直接执行，普通指令在锁内串行处理。
+        """
+        cmd_lower = command.strip().lower()
+        if cmd_lower in self.EMERGENCY_KEYWORDS:
+            return await self._handle_emergency(command)
+
+        async with self._command_lock:
+            brain_output = await self.process_command(command)
+            if brain_output.api_code or brain_output.sequence:
+                result = await self.execute_action(brain_output)
+                if result is True:
+                    brain_output.execution_status = "success"
+                elif result == "unknown":
+                    brain_output.execution_status = "unknown"
+                else:
+                    brain_output.execution_status = "failed"
+            return brain_output
+
+    async def _handle_emergency(self, command):
+        # type: (str) -> BrainOutput
+        """紧急停止处理 — 不获取锁，直接调用 StopMove
+
+        返回码语义:
+          - sport_client 不存在（模拟模式）→ success（无需物理停止）
+          - RPC 返回 0 或 -1（已停止）→ success
+          - RPC 返回其他值 → failed
+          - RPC 异常 → failed
+        """
+        self.logger.warning("!! 紧急停止: {} !!".format(command))
+        exec_status = "success"  # 默认: 模拟模式无需物理停止
+        response = "緊急停止しました"
+        if self.sport_client:
+            try:
+                result = self._rpc_call("StopMove")
+                if isinstance(result, tuple):
+                    result = result[0]
+                if result == 0 or result == -1:
+                    exec_status = "success"
+                else:
+                    exec_status = "failed"
+                    response = "緊急停止を試みましたが、エラーが発生しました（コード:{}）".format(result)
+                    self.logger.error("紧急停止返回异常: {}".format(result))
+            except Exception as e:
+                exec_status = "failed"
+                response = "緊急停止に失敗しました"
+                self.logger.error("紧急停止 RPC 失败: {}".format(e))
+        output = BrainOutput(
+            response=response,
+            api_code=1003,
+            reasoning="emergency",
+            execution_status=exec_status,
+        )
+        self._log_audit(
+            command, output,
+            route=ROUTE_EMERGENCY,
+            elapsed_ms=0.0,
+            cache_hit=False,
+            model_used="bypass",
+            current_state=None,
+            llm_output=None,
+            safety_verdict="bypass",
+        )
+        return output
+
     def _is_complex_command(self, command: str) -> bool:
         """判断是否为复杂指令"""
         return any(keyword in command for keyword in self.sequence_keywords)
@@ -434,16 +517,14 @@ class ProductionBrain:
             
             if model not in check_result.stdout:
                 self.logger.error(f"模型不存在: {model}")
-                # 尝试创建模型
-                if "v7.0" in model:
-                    create_cmd = f"ollama create {model} -f ClaudiaProduction3B_v7.0"
-                elif "v8.0" in model:
-                    create_cmd = f"ollama create {model} -f ClaudiaFinal3B_v8.0"
+                # 尝试创建模型（v12.2统一使用7B modelfile）
+                if "v12" in model:
+                    create_cmd = f"ollama create {model} -f models/ClaudiaIntelligent_7B_v2.0.modelfile"
+                    subprocess.run(create_cmd, shell=True, capture_output=True)
+                    self.logger.info(f"创建模型: {model}")
                 else:
+                    self.logger.warning(f"不支持的模型版本: {model}")
                     return None
-                    
-                subprocess.run(create_cmd, shell=True, capture_output=True)
-                self.logger.info(f"创建模型: {model}")
             
             cmd = f'echo "{command}" | timeout {timeout} ollama run {model}'
             result = subprocess.run(
@@ -483,22 +564,67 @@ class ProductionBrain:
             self.logger.error(f"Ollama调用错误: {e}")
             return None
 
-    def _normalize_battery(self, level: Optional[float]) -> Optional[float]:
-        """
-        统一电量归一化到 0.0~1.0
+    def _normalize_battery(self, level):
+        # type: (Optional[float]) -> Optional[float]
+        """电量透传（不做自动 /100 修正）
 
-        Args:
-            level: 电量值（可能是0-1或0-100）
-
-        Returns:
-            归一化后的电量值（0.0-1.0），如果输入为None则返回None
+        SafetyCompiler.compile() 会对 >1.0 做 fail-safe 拒绝，
+        迫使上游（state_monitor / _normalize_battery 调用方）修正数据源。
+        自动 /100 会掩盖上游归一化 bug，因此移除。
         """
         if level is None:
             return None
-        return (level / 100.0) if level > 1.0 else level
+        if level > 1.0:
+            self.logger.error(
+                "battery_level={} > 1.0，上游归一化异常！"
+                "SafetyCompiler 将 fail-safe 拒绝所有动作".format(level)
+            )
+        return level
 
-    def _quick_safety_precheck(self, command: str, state: Optional['SystemStateInfo']) -> Optional[str]:
+    def _sanitize_response(self, r: str) -> str:
         """
+        清理LLM输出的response字段，防止无意义或非日语输出
+
+        修复边缘案例问题：
+        - "今日はいい天気ですね" → " godee" ❌
+        - "ちんちん" → " pong" ❌
+
+        Args:
+            r: LLM输出的response字段
+
+        Returns:
+            清理后的response，如果无效则返回默认回复
+        """
+        if not r or not r.strip():
+            return "すみません、よく分かりません"
+
+        r = r.strip()
+
+        # 检查是否包含日语字符（平假名、片假名、汉字）
+        has_hiragana = any('\u3040' <= ch <= '\u309f' for ch in r)
+        has_katakana = any('\u30a0' <= ch <= '\u30ff' for ch in r)
+        has_kanji = any('\u4e00' <= ch <= '\u9faf' for ch in r)
+        has_japanese = has_hiragana or has_katakana or has_kanji
+
+        # 如果没有日语字符，返回默认回复
+        if not has_japanese:
+            self.logger.warning(f"⚠️ LLM输出无日语字符: '{r}' → 使用默认回复")
+            return "すみません、よく分かりません"
+
+        # 检查是否是无意义的单词（godee, pong等）
+        nonsense_patterns = ['godee', 'pong', 'hi', 'hello', 'ok', 'yes', 'no']
+        r_lower = r.lower()
+        if any(pattern in r_lower for pattern in nonsense_patterns):
+            self.logger.warning(f"⚠️ LLM输出包含无意义词: '{r}' → 使用默认回复")
+            return "すみません、よく分かりません"
+
+        return r
+
+    def _quick_safety_precheck(self, command, state):
+        # type: (str, Optional[Any]) -> Optional[str]
+        """DEPRECATED in V2: 使用 SafetyCompiler.compile() 替代。
+        保留代码供参考，不再被 process_command 调用。
+
         快速安全预检：在LLM前执行（毫秒级）
 
         Args:
@@ -528,8 +654,11 @@ class ProductionBrain:
 
         return None  # 允许继续
 
-    def _final_safety_gate(self, api_code: Optional[int], state: Optional['SystemStateInfo']) -> Tuple[Optional[int], str]:
-        """
+    def _final_safety_gate(self, api_code, state):
+        # type: (Optional[int], Optional[Any]) -> Tuple[Optional[int], str]
+        """DEPRECATED in V2: 使用 SafetyCompiler.compile() 替代。
+        保留代码供参考，不再被 process_command 调用。
+
         最终安全门：在执行前硬性收口（不依赖LLM/SafetyValidator）
 
         Args:
@@ -562,60 +691,6 @@ class ProductionBrain:
 
         return api_code, "ok"
 
-    def _try_hotpath(self, command: str) -> Optional[int]:
-        """
-        热路径：高频基础命令直达（仍走安全门）
-
-        Args:
-            command: 用户命令
-
-        Returns:
-            api_code或None（None表示需要走LLM）
-        """
-        cmd = command.strip().lower()
-        HOTPATH_MAP = {
-            # === 座る系（Sit） ===
-            '座って': 1009, 'すわって': 1009, '座る': 1009,
-            'おすわり': 1009, 'お座り': 1009, 'すわり': 1009,
-            'sit': 1009, 'sit down': 1009, '坐下': 1009,
-
-            # === 立つ系（Stand） ===
-            '立って': 1004, 'たって': 1004, '立つ': 1004,
-            'お立ち': 1004, '起きて': 1004, '立ち上がって': 1004,
-            'stand': 1004, 'stand up': 1004, '站立': 1004, '起立': 1004,
-
-            # === 停止系（Stop） ===
-            'とまれ': 1003, 'やめて': 1003, 'ストップ': 1003,
-            '止まって': 1003, '止まれ': 1003,
-            'stop': 1003, '停止': 1003,
-
-            # === 挨拶系（Hello） ===
-            'こんにちは': 1016, 'ハロー': 1016, 'ハイ': 1016,
-            'やあ': 1016, 'おはよう': 1016, 'おっす': 1016,
-            'hello': 1016, 'hi': 1016, 'hey': 1016,
-            '你好': 1016, '嗨': 1016,
-
-            # === 可愛い動作系（Heart） ===
-            'ハート': 1036, 'はーと': 1036, 'いい子': 1036,
-            '可愛い動作': 1036, 'かわいい動作': 1036,
-            'heart': 1036, '爱心': 1036, '比心': 1036,
-
-            # === ダンス系（Dance） ===
-            'ダンス': 1023, 'だんす': 1023, '踊って': 1023,
-            '踊る': 1023, 'おどって': 1023,
-            'dance': 1023, '跳舞': 1023,
-
-            # === 伏せ系（Down） ===
-            '伏せ': 1005, '伏せて': 1005, '横になって': 1005,
-            '寝て': 1005, 'ダウン': 1005,
-            'down': 1005, 'lie down': 1005, '趴下': 1005,
-
-            # === ストレッチ系（Stretch） ===
-            '伸び': 1017, '伸びして': 1017, 'ストレッチ': 1017,
-            'stretch': 1017, '伸懒腰': 1017,
-        }
-        return HOTPATH_MAP.get(cmd)
-
     def _is_conversational_query(self, command: str) -> bool:
         """
         检测是否为对话型查询（不应返回动作API）
@@ -630,21 +705,21 @@ class ProductionBrain:
 
         # 对话型关键词模式
         CONVERSATIONAL_PATTERNS = [
-            # 日语
+            # 日语（褒め言葉は hot_cache へ移動: かわいい/すごい → Heart(1036)）
             'あなた', '君', 'きみ', '名前', 'なまえ', '誰', 'だれ',
             '何', 'なに', 'どう', 'なぜ', 'いつ', 'どこ',
-            'かわいい', '可愛い', 'すごい', '凄い', 'ありがとう', 'ごめん',
+            'ありがとう', 'ごめん',
             'おはよう', 'こんばんは', 'さようなら', 'おやすみ',
-            # 英语
+            # 英语 (cute moved to hot_cache → Heart)
             'who are you', 'what is your name', 'your name',
             'who', 'what', 'why', 'when', 'where', 'how',
             'you are', "you're", 'thank you', 'thanks', 'sorry',
             'good morning', 'good evening', 'good night', 'goodbye',
-            'cute', 'cool', 'awesome', 'nice',
-            # 中文
+            'cool', 'awesome', 'nice',
+            # 中文 (可爱 moved to hot_cache → Heart)
             '你是', '你叫', '你的名字', '谁', '什么', '为什么',
             '怎么', '哪里', '什么时候',
-            '可爱', '厉害', '谢谢', '对不起',
+            '厉害', '谢谢', '对不起',
             '早上好', '晚上好', '晚安', '再见',
         ]
 
@@ -700,9 +775,9 @@ class ProductionBrain:
 
     async def _call_ollama_v2(self, model: str, command: str, timeout: int = 10) -> Optional[Dict]:
         """
-        调用Ollama（Track A优化版）
+        调用Ollama LLM推理
         - 使用Python ollama库
-        - asyncio.to_thread避免阻塞事件循环
+        - loop.run_in_executor避免阻塞事件循环
         - 结构化JSON输出
         """
         if not OLLAMA_AVAILABLE:
@@ -710,23 +785,12 @@ class ProductionBrain:
             return self._call_ollama(model, command, timeout)
 
         try:
-            # 在线程池中执行ollama调用（避免阻塞事件循环）
+            # P0-7: 移除每次推理时的 ollama.show() 开销
+            # 模型存在性在启动时一次性验证（_call_ollama 降级路径保留 show）
             def _sync_ollama_call():
-                try:
-                    ollama.show(model)  # 检查模型存在
-                except Exception:
-                    self.logger.error(f"模型不存在: {model}")
-                    return None
-
-                # 修复REVIEW：Track B模型需要更大的num_predict避免JSON截断
-                # 生成参数收敛优化
-                is_track_b = "intelligent" in model.lower()
-                if is_track_b:
-                    num_predict = 128  # 从256降到128（足够生成完整JSON）
-                    num_ctx = 512      # 从2048降到512（只需理解当前指令）
-                else:
-                    num_predict = 30   # Track A保持不变
-                    num_ctx = 512      # Track A也缩减上下文
+                # 生成参数优化（统一7B配置）
+                num_predict = 100
+                num_ctx = 2048
 
                 response = ollama.chat(
                     model=model,
@@ -761,43 +825,17 @@ class ProductionBrain:
             self.logger.error(f"Ollama调用错误: {e}")
             return None
 
-    def _build_enhanced_prompt(self, command: str, model_name: str,
-                               current_state: Optional['SystemStateInfo']) -> str:
-        """
-        构建增强提示（Track B关键修复：注入状态信息）
-
-        Args:
-            command: 用户原始命令
-            model_name: 模型名称（仅Track B模型注入状态）
-            current_state: 当前系统状态
-
-        Returns:
-            增强后的提示（Track B添加[STATE]前缀，Track A保持原样）
-        """
-        # 仅对Track B模型（包含"intelligent"）注入状态
-        is_track_b = "intelligent" in model_name.lower()
-
-        if not is_track_b or not current_state:
-            return command  # Track A或无状态时保持原样
-
-        # 构造Track B期望的状态前缀格式（state已归一化）
-        posture = "standing" if current_state.is_standing else "sitting"
-        battery = (current_state.battery_level or 0.0) * 100.0  # 已归一化后还原为百分比显示
-        space = "normal"  # 默认正常空间（可扩展）
-
-        # Track B Modelfile期望格式: [STATE] posture:X, battery:Y%, space:Z
-        state_prefix = f"[STATE] posture:{posture}, battery:{battery:.0f}%, space:{space}\n\n"
-        enhanced = state_prefix + command
-
-        self.logger.debug(f"🔧 状态注入: {state_prefix.strip()}")
-        return enhanced
-
-    def _log_audit(self, command: str, output: BrainOutput, route: str,
-                   elapsed_ms: float, cache_hit: bool, model_used: str,
-                   current_state: Optional['SystemStateInfo'],
-                   llm_output: Optional[str], safety_verdict: str,
-                   safety_reason: Optional[str] = None):
-        """记录审计日志（Track A增强）"""
+    def _log_audit(self, command, output, route,
+                   elapsed_ms, cache_hit, model_used,
+                   current_state,
+                   llm_output, safety_verdict,
+                   safety_reason=None):
+        # type: (str, BrainOutput, str, float, bool, str, Optional[Any], Optional[str], str, Optional[str]) -> None
+        """记录完整审计日志（route 必须使用 audit_routes.py 常量）"""
+        assert route in ALL_ROUTES, (
+            "非法 route='{}'，必须使用 audit_routes.py 中的常量。"
+            "合法值: {}".format(route, ALL_ROUTES)
+        )
         if not self.audit_logger:
             return
 
@@ -831,14 +869,28 @@ class ProductionBrain:
 
         # ===== 1) 一次性快照并统一归一化 =====
         state_snapshot = self.state_monitor.get_current_state() if self.state_monitor else None
+        snapshot_monotonic_ts = time.monotonic()  # SafetyCompiler 新鲜度校验用
+
         if state_snapshot:
+            # 浅拷贝: 不修改 state_monitor 缓存的原始对象
+            state_snapshot = copy.copy(state_snapshot)
             raw_batt = state_snapshot.battery_level
             state_snapshot.battery_level = self._normalize_battery(raw_batt)
-            # 使用跟踪的姿态（模拟模式更准确）
-            state_snapshot.is_standing = self.last_posture_standing
+
+            # P0-3: 仅在 ROS2 未真正初始化时使用内部姿态跟踪
+            ros_initialized = (
+                self.state_monitor
+                and hasattr(self.state_monitor, 'is_ros_initialized')
+                and self.state_monitor.is_ros_initialized
+            )
+            if not ros_initialized:
+                state_snapshot.is_standing = self.last_posture_standing
+
             self.logger.info(
-                f"📊 状态快照: 电池{state_snapshot.battery_level*100:.0f}%, "
-                f"姿态{'站立' if state_snapshot.is_standing else '非站立'}"
+                "状态快照: 电池{:.0f}%, 姿态{}".format(
+                    state_snapshot.battery_level * 100 if state_snapshot.battery_level else 0,
+                    '站立' if state_snapshot.is_standing else '非站立'
+                )
             )
 
         # 0. 紧急指令快速通道（绕过LLM，修复REVIEW问题）
@@ -857,119 +909,93 @@ class ProductionBrain:
                 response=cached["response"],
                 api_code=cached["api_code"]
             )
-            # Track A：审计日志
-            self._log_audit(command, output, route="emergency", elapsed_ms=elapsed,
+            # 记录审计日志
+            self._log_audit(command, output, route=ROUTE_EMERGENCY, elapsed_ms=elapsed,
                           cache_hit=False, model_used="bypass",
                           current_state=None, llm_output=None,
                           safety_verdict="bypass")
             return output
 
-        # ===== 2) 快速安全预检（在LLM前，毫秒级） =====
-        rejection_reason = self._quick_safety_precheck(command, state_snapshot)
-        if rejection_reason:
-            self.logger.warning(f"🛡️ 快速安全预检拒绝: {rejection_reason}")
-            elapsed = (time.time() - start_time) * 1000
-            self._log_audit(command, BrainOutput(response=rejection_reason, api_code=None),
-                          route="precheck_reject", elapsed_ms=elapsed, cache_hit=False,
-                          model_used="precheck", current_state=state_snapshot,
-                          llm_output=None, safety_verdict="reject_precheck")
-            return BrainOutput(
-                response=rejection_reason,
-                api_code=None,
-                confidence=1.0,
-                reasoning="Rejected by quick safety precheck before LLM"
-            )
+        # ===== 2) 安全预检 — DEPRECATED (SafetyCompiler 统一处理) =====
+        # _quick_safety_precheck 已被 SafetyCompiler 取代。
+        # SafetyCompiler 在每条产出动作的路径上执行，覆盖了旧预检的所有场景。
+        # 旧预检基于文本关键词，而 SafetyCompiler 基于 api_code，更精确。
 
-        # ===== 3) 热路径尝试（高频命令直达，节省秒级延迟） =====
-        hotpath_api = self._try_hotpath(command)
-        if hotpath_api is not None:
-            self.logger.info(f"⚡ 热路径命中: {command} → {hotpath_api}")
+        # ===== 3) 热点缓存检查 → SafetyCompiler 统一安全编译 =====
+        # 三层归一化:
+        #   1) strip() 精确匹配
+        #   2) 去除末尾常见标点 (!！?？。．、,)
+        #   3) lower() 降级匹配（英文/混合输入）
+        cmd_stripped = command.strip()
+        cmd_normalized = cmd_stripped.rstrip("!！?？。．、,")
+        cmd_lower = cmd_normalized.lower()
+        cached = (
+            self.hot_cache.get(cmd_stripped)
+            or self.hot_cache.get(cmd_normalized)
+            or self.hot_cache.get(cmd_lower)
+        )
+        if cached:
+            self.logger.info("热点缓存命中: {}".format(command))
 
-            # ===== 热路径安全链路：SafetyValidator + 最终安全门 =====
+            api_code = cached.get("api_code")
+            sequence = cached.get("sequence")
+            candidate = sequence if sequence else ([api_code] if api_code else [])
 
-            # 1) SafetyValidator检查（站立需求、动作依赖）
-            api_code = hotpath_api
-            sequence = None
-
-            if self.safety_validator and state_snapshot:
-                safety_result = self.safety_validator.validate_action(api_code, state_snapshot)
-
-                if not safety_result.is_safe:
-                    # SafetyValidator拒绝
-                    self.logger.warning(f"⛔ 热路径安全验证失败: {safety_result.reason}")
-                    elapsed = (time.time() - start_time) * 1000
-
-                    self._log_audit(command, BrainOutput(response=safety_result.reason, api_code=None),
-                                  route="hotpath_safety_rejected", elapsed_ms=elapsed, cache_hit=False,
-                                  model_used="hotpath", current_state=state_snapshot,
-                                  llm_output=None, safety_verdict="rejected_safety_validator")
-
-                    return BrainOutput(
-                        response=safety_result.reason,
-                        api_code=None,
-                        confidence=1.0,
-                        reasoning="hotpath_safety_rejected",
-                        success=False
-                    )
-
-                # 检查是否需要序列补全（如坐姿→需先站立）
-                if safety_result.modified_sequence:
-                    self.logger.info(f"🔧 热路径自动补全序列: {safety_result.modified_sequence}")
-                    sequence = safety_result.modified_sequence
-                    if safety_result.should_use_sequence_only:
-                        api_code = None  # 仅执行序列，避免重复执行
-
-            # 2) 最终安全门（电量硬性约束）
-            final_api = api_code if api_code is not None else (sequence[-1] if sequence else None)
-            safe_api, gate_reason = self._final_safety_gate(final_api, state_snapshot)
-
-            if safe_api is None:
-                # 电量不足，拒绝
-                self.logger.warning(f"⛔ 热路径最终安全门拒绝: {gate_reason}")
-                elapsed = (time.time() - start_time) * 1000
-
-                self._log_audit(command, BrainOutput(response=f"安全のため動作を停止しました", api_code=None),
-                              route="hotpath_final_gate_rejected", elapsed_ms=elapsed, cache_hit=False,
-                              model_used="hotpath", current_state=state_snapshot,
-                              llm_output=None, safety_verdict=f"rejected_final_gate:{gate_reason}")
-
-                return BrainOutput(
-                    response=f"安全のため動作を停止しました ({gate_reason})",
-                    api_code=None,
-                    confidence=1.0,
-                    reasoning="hotpath_final_gate_rejected",
-                    success=False
+            if candidate:
+                # fail-closed: state_snapshot=None → battery=0.0, is_standing=False
+                # 只有 SAFE_ACTIONS 能通过（电量门控 ≤0.10 策略）
+                _batt = state_snapshot.battery_level if state_snapshot else 0.0
+                _stand = state_snapshot.is_standing if state_snapshot else False
+                _ts = snapshot_monotonic_ts if state_snapshot else None
+                if not state_snapshot:
+                    self.logger.warning("状態監視なし: fail-safe安全コンパイル (battery=0.0)")
+                verdict = self.safety_compiler.compile(
+                    candidate, _batt, _stand, snapshot_timestamp=_ts,
                 )
+                if verdict.is_blocked:
+                    self.logger.warning("热路径安全拒绝: {}".format(verdict.block_reason))
+                    elapsed = (time.time() - start_time) * 1000
+                    rejected_output = BrainOutput(
+                        response=verdict.response_override or "安全のため動作を停止しました",
+                        api_code=None, confidence=1.0,
+                        reasoning="hotpath_safety_rejected", success=False,
+                    )
+                    self._log_audit(
+                        command, rejected_output, route=ROUTE_HOTPATH_REJECTED,
+                        elapsed_ms=elapsed, cache_hit=True, model_used="hotpath",
+                        current_state=state_snapshot, llm_output=None,
+                        safety_verdict="rejected:{}".format(verdict.block_reason),
+                    )
+                    return rejected_output
 
-            # 若降级，调整最终执行的动作
-            if safe_api != final_api:
-                self.logger.info(f"🔄 热路径动作降级: {final_api} → {safe_api}")
-                if sequence:
-                    # 有序列：替换最后一个动作
-                    sequence = sequence[:-1] + [safe_api]
-                    api_code = None
+                # verdict.executable_sequence 已含自动 StandUp + 降级
+                exec_seq = verdict.executable_sequence
+                if len(exec_seq) == 1:
+                    final_api = exec_seq[0]
+                    final_sequence = None
                 else:
-                    api_code = safe_api
+                    final_api = None
+                    final_sequence = exec_seq
+            else:
+                final_api = api_code
+                final_sequence = sequence
 
-            # 3) 构建输出（不执行，由commander统一执行）
             brain_output = BrainOutput(
-                response="了解しました",
-                api_code=api_code,
-                sequence=sequence,
+                response=cached.get("response", "実行します"),
+                api_code=final_api,
+                sequence=final_sequence,
                 confidence=1.0,
                 reasoning="hotpath_executed",
-                success=True  # 标记为待执行（非已执行）
+                success=True,
             )
 
             elapsed = (time.time() - start_time) * 1000
-            self.logger.info(f"✅ 热路径处理完成 ({elapsed:.0f}ms)")
-
-            # 4) 审计日志
-            self._log_audit(command, brain_output,
-                          route="hotpath", elapsed_ms=elapsed, cache_hit=False,
-                          model_used="hotpath", current_state=state_snapshot,
-                          llm_output=None, safety_verdict="ok")
-
+            self.logger.info("热路径处理完成 ({:.0f}ms)".format(elapsed))
+            self._log_audit(
+                command, brain_output, route=ROUTE_HOTPATH,
+                elapsed_ms=elapsed, cache_hit=True, model_used="hotpath",
+                current_state=state_snapshot, llm_output=None, safety_verdict="ok",
+            )
             return brain_output
 
         # 热路径未命中，记录日志
@@ -1005,24 +1031,51 @@ class ProductionBrain:
 
         for key, seq in SEQUENCE_HOTPATH.items():
             if key in cmd_lower:
-                self.logger.info(f"⚡ 序列预定义命中: {key} → {seq}")
+                self.logger.info("序列预定义命中: {} -> {}".format(key, seq))
+
+                # P0-9: 序列路径必须走 SafetyCompiler（旧版无安全检查）
+                # fail-closed: state_snapshot=None → battery=0.0, is_standing=False
+                _batt = state_snapshot.battery_level if state_snapshot else 0.0
+                _stand = state_snapshot.is_standing if state_snapshot else False
+                _ts = snapshot_monotonic_ts if state_snapshot else None
+                if not state_snapshot:
+                    self.logger.warning("状態監視なし: fail-safe安全コンパイル (battery=0.0)")
+                verdict = self.safety_compiler.compile(
+                    seq, _batt, _stand, snapshot_timestamp=_ts,
+                )
+                if verdict.is_blocked:
+                    self.logger.warning("序列安全拒绝: {}".format(verdict.block_reason))
+                    elapsed = (time.time() - start_time) * 1000
+                    rejected_output = BrainOutput(
+                        response=verdict.response_override or "安全のため動作を停止しました",
+                        api_code=None, reasoning="sequence_safety_rejected",
+                    )
+                    self._log_audit(
+                        command, rejected_output, route=ROUTE_SEQUENCE,
+                        elapsed_ms=elapsed, cache_hit=False, model_used="sequence_hotpath",
+                        current_state=state_snapshot, llm_output=None,
+                        safety_verdict="rejected:{}".format(verdict.block_reason),
+                    )
+                    return rejected_output
+                exec_seq = verdict.executable_sequence
+
                 seq_output = BrainOutput(
-                    response="了解しました",
-                    sequence=seq,
+                    response=get_response_for_sequence(exec_seq),
+                    sequence=exec_seq,
                     confidence=1.0,
                     reasoning="sequence_predefined",
-                    success=True
+                    success=True,
                 )
 
                 elapsed = (time.time() - start_time) * 1000
-                self._log_audit(command, seq_output,
-                              route="sequence_predefined", elapsed_ms=elapsed, cache_hit=False,
-                              model_used="sequence_hotpath", current_state=state_snapshot,
-                              llm_output=None, safety_verdict="ok")
-
+                self._log_audit(
+                    command, seq_output, route=ROUTE_SEQUENCE,
+                    elapsed_ms=elapsed, cache_hit=False, model_used="sequence_hotpath",
+                    current_state=state_snapshot, llm_output=None, safety_verdict="ok",
+                )
                 return seq_output
 
-        self.logger.info(f"🔍 序列预定义未命中，检查对话查询...")
+        self.logger.info("序列预定义未命中，检查对话查询...")
 
         # ===== 3.5) 对话查询检测（避免LLM将对话误解为动作） =====
         if self._is_conversational_query(command):
@@ -1041,179 +1094,159 @@ class ProductionBrain:
 
             # 审计日志
             self._log_audit(command, dialog_output,
-                          route="conversational", elapsed_ms=elapsed, cache_hit=False,
+                          route=ROUTE_CONVERSATIONAL, elapsed_ms=elapsed, cache_hit=False,
                           model_used="dialog_detector", current_state=state_snapshot,
                           llm_output=None, safety_verdict="dialog")
 
             return dialog_output
 
-        # 0.5. 特殊命令处理 - 舞蹈随机选择（使用state_snapshot）
+        # 0.5. 特殊命令处理 - 舞蹈随机选择 → SafetyCompiler
         dance_commands = ["dance", "ダンス", "跳舞", "舞蹈", "踊る", "踊って"]
         if command.lower() in dance_commands:
-            # 随机选择Dance1或Dance2
             dance_choice = random.choice([1022, 1023])
             dance_name = "1" if dance_choice == 1022 else "2"
 
-            # 使用状态快照（不再重复读取）
-            # 安全验证（修复REVIEW漏洞：dance分支绕过安全栅格）
-            api_code = dance_choice
-            sequence = None
-            if self.safety_validator:
-                safety_result = self.safety_validator.validate_action(api_code, state_snapshot)
-                if not safety_result.is_safe:
-                    self.logger.warning(f"🛡️ 舞蹈动作安全拒绝: {safety_result.reason}")
-                    return BrainOutput(
-                        response=safety_result.reason,
-                        api_code=None,
-                        confidence=0.5
-                    )
-                # 如果需要自动补全姿态（如自动站立）
-                if safety_result.modified_sequence:
-                    self.logger.info(f"🔧 舞蹈自动补全: {safety_result.modified_sequence}")
-                    sequence = safety_result.modified_sequence
-                    if safety_result.should_use_sequence_only:
-                        api_code = None
+            # fail-closed: state_snapshot=None → battery=0.0, is_standing=False
+            _batt = state_snapshot.battery_level if state_snapshot else 0.0
+            _stand = state_snapshot.is_standing if state_snapshot else False
+            _ts = snapshot_monotonic_ts if state_snapshot else None
+            if not state_snapshot:
+                self.logger.warning("状態監視なし: fail-safe安全コンパイル (battery=0.0)")
+            verdict = self.safety_compiler.compile(
+                [dance_choice], _batt, _stand, snapshot_timestamp=_ts,
+            )
+            if verdict.is_blocked:
+                self.logger.warning("舞蹈安全拒绝: {}".format(verdict.block_reason))
+                elapsed = (time.time() - start_time) * 1000
+                rejected_output = BrainOutput(
+                    response=verdict.response_override or "安全のため動作を停止しました",
+                    api_code=None, reasoning="dance_safety_rejected",
+                )
+                self._log_audit(
+                    command, rejected_output, route=ROUTE_DANCE,
+                    elapsed_ms=elapsed, cache_hit=False, model_used="dance_random",
+                    current_state=state_snapshot, llm_output=None,
+                    safety_verdict="rejected:{}".format(verdict.block_reason),
+                )
+                return rejected_output
+
+            exec_seq = verdict.executable_sequence
+            if len(exec_seq) == 1:
+                final_api = exec_seq[0]
+                final_sequence = None
+            else:
+                final_api = None
+                final_sequence = exec_seq
 
             elapsed = (time.time() - start_time) * 1000
-            self.logger.info(f"🎲 随机选择舞蹈{dance_name} ({elapsed:.0f}ms)")
-            return BrainOutput(
-                response=f"踊ります{dance_name}",
-                api_code=api_code,
-                sequence=sequence
+            self.logger.info("随机选择舞蹈{} ({:.0f}ms)".format(dance_name, elapsed))
+            dance_output = BrainOutput(
+                response="踊ります{}".format(dance_name),
+                api_code=final_api,
+                sequence=final_sequence,
             )
-        
-        # 1. 检查热点缓存（使用state_snapshot）
-        if command in self.hot_cache:
-            cached = self.hot_cache[command]
-
-            # 使用状态快照（不再重复读取）
-            # 安全验证（修复REVIEW漏洞：hot_cache绕过安全栅格）
-            api_code = cached.get("api_code")
-            sequence = cached.get("sequence")
-
-            if self.safety_validator and api_code:
-                safety_result = self.safety_validator.validate_action(api_code, state_snapshot)
-                if not safety_result.is_safe:
-                    self.logger.warning(f"🛡️ 缓存命令安全拒绝: {safety_result.reason}")
-                    return BrainOutput(
-                        response=safety_result.reason,
-                        api_code=None,
-                        confidence=0.5
-                    )
-                # 如果需要自动补全姿态
-                if safety_result.modified_sequence:
-                    self.logger.info(f"🔧 缓存命令自动补全: {safety_result.modified_sequence}")
-                    sequence = safety_result.modified_sequence
-                    if safety_result.should_use_sequence_only:
-                        api_code = None
-
-            # 序列安全验证
-            if self.safety_validator and sequence:
-                seq_safety = self.safety_validator.validate_sequence(sequence, state_snapshot)
-                if not seq_safety.is_safe:
-                    self.logger.warning(f"🛡️ 缓存序列安全拒绝: {seq_safety.reason}")
-                    return BrainOutput(
-                        response=seq_safety.reason,
-                        api_code=None,
-                        confidence=0.5
-                    )
-
-            elapsed = (time.time() - start_time) * 1000
-            self.logger.info(f"⚡ 缓存命中 ({elapsed:.0f}ms)")
-            return BrainOutput(
-                response=cached["response"],
-                api_code=api_code,
-                sequence=sequence
+            self._log_audit(
+                command, dance_output, route=ROUTE_DANCE,
+                elapsed_ms=elapsed, cache_hit=False, model_used="dance_random",
+                current_state=state_snapshot, llm_output=None, safety_verdict="ok",
             )
+            return dance_output
 
-        # 2. 路由决策：默认使用7B（理解能力强，延迟可接受）
-        selected_7b = self.model_7b
+        # 2. 统一使用7B模型推理 → SafetyCompiler 统一安全编译
+        self.logger.info("使用7B模型推理...")
+        result = await self._call_ollama_v2(
+            self.model_7b,
+            command,
+            timeout=25,
+        )
 
-        # 2.5. 灰度切流决策（可选，用于A/B测试）
-        if self.ab_test_ratio > 0:
-            import random
-            if random.random() < self.ab_test_ratio:
-                # 切换到Track B模型（如果需要测试其他模型）
-                if "intelligent" not in selected_7b:
-                    selected_7b = "claudia-intelligent-7b:v1"
-                    self.logger.debug(f"🔬 灰度切流→Track B: {selected_7b}")
-
-        # 统一使用7B处理所有非热路径命令（理解能力 > 速度）
-        self.logger.info("🧠 使用7B模型推理...")
-        enhanced_cmd = self._build_enhanced_prompt(command, selected_7b, state_snapshot)
-        result = await self._call_ollama_v2(selected_7b, enhanced_cmd, timeout=25)  # 放宽timeout到25秒
-        model_used = "7B"
-
-        # 3. 处理结果
         if result:
             elapsed = (time.time() - start_time) * 1000
-            self.logger.info(f"✅ {model_used}模型响应 ({elapsed:.0f}ms)")
+            self.logger.info("7B模型响应 ({:.0f}ms)".format(elapsed))
 
             # 提取字段 (支持完整字段名和缩写字段名)
-            response = result.get("response") or result.get("r", "実行します")
+            raw_response = result.get("response") or result.get("r", "実行します")
+            response = self._sanitize_response(raw_response)
             api_code = result.get("api_code") or result.get("a")
             sequence = result.get("sequence") or result.get("s")
 
-            # SafetyValidator检查（使用state_snapshot）
-            if self.safety_validator and api_code:
-                safety_result = self.safety_validator.validate_action(api_code, state_snapshot)
+            # 解析层白名单过滤（VALID_API_CODES: 无参数 + 已启用）
+            # 非法 api_code 视为纯对话（不进 SafetyCompiler 以免误阻）
+            if api_code is not None and api_code not in VALID_API_CODES:
+                self.logger.warning("LLM 输出非法 api_code={}，降级为纯文本".format(api_code))
+                api_code = None
+            if sequence:
+                valid_seq = [c for c in sequence if c in VALID_API_CODES]
+                if len(valid_seq) != len(sequence):
+                    dropped = [c for c in sequence if c not in VALID_API_CODES]
+                    self.logger.warning("LLM 序列含非法码 {}，过滤后: {}".format(dropped, valid_seq))
+                    sequence = valid_seq if valid_seq else None
 
-                if not safety_result.is_safe:
-                    self.logger.warning(f"🛡️ SafetyValidator拒绝: {safety_result.reason}")
-                    return BrainOutput(
-                        response=safety_result.reason,
-                        api_code=None,
-                        confidence=0.5
+            # 构建候选动作列表
+            candidate = sequence if sequence else ([api_code] if api_code else [])
+
+            if candidate:
+                # fail-closed: state_snapshot=None → battery=0.0, is_standing=False
+                _batt = state_snapshot.battery_level if state_snapshot else 0.0
+                _stand = state_snapshot.is_standing if state_snapshot else False
+                _ts = snapshot_monotonic_ts if state_snapshot else None
+                if not state_snapshot:
+                    self.logger.warning("状態監視なし: fail-safe安全コンパイル (battery=0.0)")
+                verdict = self.safety_compiler.compile(
+                    candidate, _batt, _stand, snapshot_timestamp=_ts,
+                )
+                if verdict.is_blocked:
+                    self.logger.warning("LLM 路径安全拒绝: {}".format(verdict.block_reason))
+                    rejected_output = BrainOutput(
+                        response=verdict.response_override or "安全のため動作を停止しました",
+                        api_code=None, confidence=1.0,
+                        reasoning="llm_safety_rejected",
                     )
-
-                # 如果安全校验建议修改序列（修复：避免双轨执行）
-                if safety_result.modified_sequence:
-                    self.logger.info(f"🔧 自动补全前置动作: {safety_result.modified_sequence}")
-                    sequence = safety_result.modified_sequence
-                    if safety_result.should_use_sequence_only:
-                        api_code = None
-
-            # 序列安全校验
-            if self.safety_validator and sequence:
-                seq_safety = self.safety_validator.validate_sequence(sequence, state_snapshot)
-                if not seq_safety.is_safe:
-                    self.logger.warning(f"🛡️ 序列安全拒绝: {seq_safety.reason}")
-                    return BrainOutput(
-                        response=seq_safety.reason,
-                        api_code=None,
-                        confidence=0.5
+                    self._log_audit(
+                        command, rejected_output, route=ROUTE_LLM_7B,
+                        elapsed_ms=elapsed, cache_hit=False, model_used="7B",
+                        current_state=state_snapshot,
+                        llm_output=str(result)[:200],
+                        safety_verdict="rejected:{}".format(verdict.block_reason),
                     )
+                    return rejected_output
 
-            # ===== 4) 最终安全门（代码层硬性收口，执行前最后检查） =====
-            safe_api, gate_reason = self._final_safety_gate(api_code, state_snapshot)
-            if safe_api != api_code:
-                self.logger.warning(f"🚫 最终安全门: {gate_reason}")
-
-                if safe_api is None:
-                    # 被拒绝
-                    return BrainOutput(
-                        response=f"安全のため動作を停止しました ({state_snapshot.battery_level*100:.0f}%)" if state_snapshot else "安全のため動作を停止しました",
-                        api_code=None,
-                        confidence=1.0,
-                        reasoning=gate_reason
-                    )
+                exec_seq = verdict.executable_sequence
+                if len(exec_seq) == 1:
+                    final_api = exec_seq[0]
+                    final_sequence = None
                 else:
-                    # 被降级
-                    api_code = safe_api
-                    response = f"電池を節約するため、動作を調整します ({state_snapshot.battery_level*100:.0f}%)" if state_snapshot else "電池を節約するため、動作を調整します"
+                    final_api = None
+                    final_sequence = exec_seq
 
-            return BrainOutput(
+                # 降级时替换响应
+                if verdict.warnings:
+                    for w in verdict.warnings:
+                        self.logger.info("SafetyCompiler: {}".format(w))
+            else:
+                final_api = api_code
+                final_sequence = sequence
+
+            llm_output = BrainOutput(
                 response=response,
-                api_code=api_code,
-                sequence=sequence
+                api_code=final_api,
+                sequence=final_sequence,
             )
-        
+            self._log_audit(
+                command, llm_output, route=ROUTE_LLM_7B,
+                elapsed_ms=elapsed, cache_hit=False, model_used="7B",
+                current_state=state_snapshot,
+                llm_output=str(result)[:200],
+                safety_verdict="ok",
+            )
+            return llm_output
+
         # 4. 降级处理
         elapsed = (time.time() - start_time) * 1000
-        self.logger.warning(f"⚠️ 模型无响应，使用默认 ({elapsed:.0f}ms)")
+        self.logger.warning("模型无响应，使用默认 ({:.0f}ms)".format(elapsed))
         return BrainOutput(
             response="すみません、理解できませんでした",
-            api_code=None
+            api_code=None,
         )
     
     async def execute_action(self, brain_output: BrainOutput) -> bool:
@@ -1243,171 +1276,112 @@ class ProductionBrain:
         
         return False
     
-    async def _execute_real(self, brain_output: BrainOutput) -> bool:
-        """真实执行（带状态管理）"""
-        try:
-            # 处理序列动作
-            if brain_output.sequence:
-                self.logger.info(f"🤖 执行序列: {brain_output.sequence}")
-                for api in brain_output.sequence:
-                    brain_output_single = BrainOutput("", api)
-                    success = await self._execute_real(brain_output_single)
-                    if not success:
-                        self.logger.warning(f"序列中API {api} 执行失败")
-                    await asyncio.sleep(1)  # 动作间隔
-                return True
-            
-            # 处理单个动作
-            if brain_output.api_code:
-                # 映射到SportClient方法
-                method_map = {
-                    # 基础动作（已验证100%成功）
-                    1001: "Damp",
-                    1002: "BalanceStand",
-                    1003: "StopMove", 
-                    1004: "StandUp",
-                    1005: "StandDown",
-                    1006: "RecoveryStand",
-                    1009: "Sit",
-                    1010: "RiseSit",      # 起坐
-                    
-                    # 表演动作（已验证100%成功）
-                    1016: "Hello",
-                    1017: "Stretch",
-                    1036: "Heart",        # ✅ 真正的比心API！
-                    1029: "Scrape",       # 刮擦
-                    
-                    # 高级动作（已验证100%成功）
-                    1030: "FrontFlip",    # 前空翻
-                    1031: "FrontJump",    # 前跳
-                    1032: "FrontPounce",  # 前扑
-                    
-                    # 舞蹈动作（返回3104，成功码）
-                    1022: "Dance1",
-                    1023: "Dance2",
-                    
-                    # 其他已验证动作
-                    1007: "Euler",         # 姿态控制(需要参数)
-                    1008: "Move",          # 移动(需要参数) 
-                    1015: "SpeedLevel",    # 速度等级(需要参数)
-                    1019: "ContinuousGait",# 连续步态(需要参数)
-                    1027: "SwitchJoystick",# 切换摇杆(需要参数)
-                    1028: "Pose",          # 摆姿势(需要参数)
-                }
-                
-                # 检查是否需要先站立
-                if brain_output.api_code in self.actions_need_standing and self.robot_state != "standing":
-                    self.logger.info(f"⚡ 动作需要站立状态，先执行站立...")
-                    if hasattr(self.sport_client, "StandUp"):
-                        stand_result = self.sport_client.StandUp()
-                        self.logger.info(f"   站立返回码: {stand_result}")
-                        if stand_result in [0, -1]:  # 0成功，-1已经站立
-                            self.robot_state = "standing"
-                            await asyncio.sleep(1.5)  # 等待站立完成
-                        else:
-                            self.logger.warning(f"   站立失败: {stand_result}")
-                
-                method_name = method_map.get(brain_output.api_code)
-                
-                # 特殊处理某些方法
-                if method_name == "Dance2":
-                    # Dance2直接调用
-                    if hasattr(self.sport_client, "Dance2"):
-                        self.logger.info(f"🤖 执行: Dance2 (API:{brain_output.api_code})")
-                        result = self.sport_client.Dance2()
-                    else:
-                        self.logger.warning(f"未找到Dance2方法，跳过")
-                        return False
-                elif method_name == "Rollover":
-                    # 尝试Rollover，如果没有则跳过
-                    if hasattr(self.sport_client, "Rollover"):
-                        self.logger.info(f"🤖 执行: Rollover (API:{brain_output.api_code})")
-                        result = self.sport_client.Rollover()
-                    else:
-                        self.logger.warning(f"未找到Rollover方法，跳过")
-                        return False
-                elif method_name == "Handstand":
-                    # 高级动作，可能需要特殊处理
-                    if hasattr(self.sport_client, "Handstand"):
-                        self.logger.info(f"🤖 执行: Handstand (API:{brain_output.api_code})")
-                        result = self.sport_client.Handstand()
-                    else:
-                        self.logger.warning(f"未找到Handstand方法，跳过")
-                        return False
-                elif method_name and hasattr(self.sport_client, method_name):
-                    method = getattr(self.sport_client, method_name)
-                    self.logger.info(f"🤖 执行: {method_name} (API:{brain_output.api_code})")
-                    
-                    # 处理需要参数的方法
-                    if brain_output.api_code in [1007, 1008, 1015, 1019, 1027, 1028]:
-                        if brain_output.api_code == 1007:  # Euler
-                            result = method(0, 0, 0)  # 默认姿态
-                        elif brain_output.api_code == 1008:  # Move
-                            result = method(0.2, 0, 0)  # 缓慢前进
-                        elif brain_output.api_code == 1015:  # SpeedLevel
-                            result = method(0)  # 默认速度
-                        elif brain_output.api_code == 1019:  # ContinuousGait
-                            result = method(1)  # 启用
-                        elif brain_output.api_code == 1027:  # SwitchJoystick
-                            result = method(True)  # 启用
-                        elif brain_output.api_code == 1028:  # Pose
-                            result = method(True)  # 启用摆姿势
-                    else:
-                        result = method()  # 无参数方法
-                else:
-                    self.logger.error(f"未找到API方法: {brain_output.api_code} - {method_name}")
-                    return False
-                
-                self.logger.info(f"   返回码: {result}")
-                
-                # 更新状态（同时更新姿态跟踪）
-                if brain_output.api_code == 1004:  # StandUp
-                    self.robot_state = "standing"
-                    self.last_posture_standing = True
-                elif brain_output.api_code == 1009:  # Sit
-                    self.robot_state = "sitting"
-                    self.last_posture_standing = False
-                elif brain_output.api_code == 1005:  # StandDown
-                    self.robot_state = "lying"
-                    self.last_posture_standing = False
+    async def _execute_real(self, brain_output):
+        # type: (BrainOutput) -> Any
+        """真实执行（使用 _rpc_call + registry METHOD_MAP）
 
-                # 记录最后执行的API（用于审计）
-                self.last_executed_api = brain_output.api_code
-                
-            # 判断执行结果（包含3104成功码）
+        Returns:
+            True/"success" — 成功
+            "unknown" — 3104 超时但机器人可达（动作可能仍在执行）
+            False/"failed" — 失败
+        """
+        try:
+            # P0-8: 序列中间失败则中止（不再静默继续）
+            if brain_output.sequence:
+                self.logger.info("执行序列: {}".format(brain_output.sequence))
+                for i, api in enumerate(brain_output.sequence):
+                    single = BrainOutput("", api)
+                    success = await self._execute_real(single)
+                    if not success and success != "unknown":
+                        self.logger.error(
+                            "序列中止: API {} (第{}/{}) 执行失败".format(
+                                api, i + 1, len(brain_output.sequence)
+                            )
+                        )
+                        return False
+                    await asyncio.sleep(1)
+                return True
+
+            if not brain_output.api_code:
+                return False
+
+            # 从 registry 查询方法名（替代内联 method_map）
+            method_name = METHOD_MAP.get(brain_output.api_code)
+            if not method_name:
+                self.logger.error("未注册的 API: {}".format(brain_output.api_code))
+                return False
+
+            # SafetyCompiler 已处理站立前置（自动前插 StandUp），
+            # 此处不再重复检查 actions_need_standing。
+
+            # 使用 _rpc_call 统一调用（线程安全 + 超时管理）
+            self.logger.info("执行: {} (API:{})".format(method_name, brain_output.api_code))
+
+            # 参数化动作使用 SAFE_DEFAULT_PARAMS
+            if brain_output.api_code in SAFE_DEFAULT_PARAMS:
+                params = SAFE_DEFAULT_PARAMS[brain_output.api_code]
+                result = self._rpc_call(method_name, *params)
+            else:
+                result = self._rpc_call(method_name)
+
+            # 处理元组返回值（如 GetState 返回 (code, data)）
+            if isinstance(result, tuple):
+                result = result[0]
+
+            self.logger.info("   返回码: {}".format(result))
+
+            # 更新姿态跟踪
+            if brain_output.api_code == 1004:  # StandUp
+                self.robot_state = "standing"
+                self.last_posture_standing = True
+            elif brain_output.api_code == 1009:  # Sit
+                self.robot_state = "sitting"
+                self.last_posture_standing = False
+            elif brain_output.api_code == 1005:  # StandDown
+                self.robot_state = "lying"
+                self.last_posture_standing = False
+
+            self.last_executed_api = brain_output.api_code
+
+            # P0-1: 修复 3104 误判（超时 != 成功）
             if result == 0:
                 return True
-            elif result == -1:  # 已经在该状态
+            elif result == -1:  # 已处于目标状态
                 return True
-            elif result == 3104:  # 舞蹈/触发等动作完成码
-                self.logger.info(f"   ✅ 动作完成 (3104)")
-                return True
+            elif result == 3104:  # RPC_ERR_CLIENT_API_TIMEOUT
+                self.logger.warning("   动作响应超时 (3104)")
+                try:
+                    state_code, _ = self._rpc_call(
+                        "GetState", ["mode"], timeout_override=3.0
+                    )
+                    if state_code == 0:
+                        self.logger.warning("   连通性确认OK，动作可能仍在执行")
+                        return "unknown"
+                    else:
+                        self.logger.error("   连通性异常 ({})".format(state_code))
+                        return False
+                except Exception as e:
+                    self.logger.error("   连通性确认失败: {}".format(e))
+                    return False
             else:
-                # 分析错误码
+                # P0-2: 修复 3103 注释和日志
                 if result == 3103:
-                    self.logger.error(f"   ❌ APP占用中 (3103)")
-                    self.logger.error("      请关闭APP并重启机器人")
+                    self.logger.error("   控制冲突 (3103): APP可能占用sport_mode")
+                    self.logger.error("      请关闭APP并重启机器人，或检查Init()是否成功")
                 elif result == 3203:
-                    self.logger.warning(f"   ⚠️ 动作不支持 (3203)")
-                    self.logger.warning("      该API在Go2固件中未实现")
+                    self.logger.warning("   动作不支持 (3203): 该API在Go2固件中未实现")
                 else:
-                    self.logger.warning(f"   ⚠️ 未知错误: {result}")
+                    self.logger.warning("   未知错误: {}".format(result))
                 return False
-            
-            # 如果没有API code也没有sequence，返回False
-            return False
-            
+
         except Exception as e:
-            self.logger.error(f"执行错误: {e}")
+            self.logger.error("执行错误: {}".format(e))
             return False
     
     def get_statistics(self) -> Dict:
         """获取统计信息"""
         return {
-            "models": {
-                "3b": self.model_3b,
-                "7b": self.model_7b
-            },
+            "model": self.model_7b,
             "cache_size": len(self.hot_cache),
             "hardware_mode": self.use_real_hardware,
             "sport_client": self.sport_client is not None
