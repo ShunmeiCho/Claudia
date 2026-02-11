@@ -1,0 +1,49 @@
+{
+  "performance": {
+    "max_response_time_ms": 200.0,
+    "stress_test_iterations": 100,
+    "stress_test_duration": 10.0,
+    "performance_samples": 50,
+    "baseline_cpu_threshold": 80.0,
+    "baseline_memory_mb": 100.0
+  },
+  "led_modes": {
+    "wake_confirm_duration": 2.0,
+    "processing_timeout": 30.0,
+    "action_complete_duration": 1.5,
+    "error_state_duration": 2.5,
+    "mode_transition_delay": 0.1
+  },
+  "environment": {
+    "light_levels": [
+      "extremely_dark",
+      "dark",
+      "dim",
+      "normal",
+      "bright",
+      "extremely_bright"
+    ],
+    "brightness_levels": [
+      0,
+      25,
+      50,
+      75,
+      100
+    ],
+    "adaptation_timeout": 5.0,
+    "camera_warmup_time": 2.0
+  },
+  "hardware": {
+    "unitree_ip": "192.168.123.161",
+    "connection_timeout": 5.0,
+    "retry_attempts": 3,
+    "hardware_required": false,
+    "mock_hardware": true
+  },
+  "stability": {
+    "long_duration_hours": 1.0,
+    "memory_leak_threshold_mb": 50.0,
+    "error_rate_threshold": 1.0,
+    "recovery_test_cycles": 10
+  }
+}

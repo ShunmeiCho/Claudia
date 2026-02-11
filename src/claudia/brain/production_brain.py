@@ -12,7 +12,7 @@ import logging
 import subprocess
 import random
 import threading
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Union
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import lru_cache
@@ -49,6 +49,12 @@ except ImportError:
     STATE_MONITOR_AVAILABLE = False
 
 try:
+    from claudia.brain.sdk_state_provider import SDKStateProvider
+    SDK_STATE_PROVIDER_AVAILABLE = True
+except ImportError:
+    SDK_STATE_PROVIDER_AVAILABLE = False
+
+try:
     from claudia.brain.safety_validator import get_safety_validator, SafetyCheckResult
     SAFETY_VALIDATOR_AVAILABLE = True
 except ImportError:
@@ -59,6 +65,10 @@ try:
     AUDIT_LOGGER_AVAILABLE = True
 except ImportError:
     AUDIT_LOGGER_AVAILABLE = False
+
+# Go2 固件 GetState RPC 要求全字段查询（单键查询返回空响应体）
+# 参考: unitree_sdk2py/test/client/sport_client_example.py:101
+GETSTATE_FULL_KEYS = ["state", "bodyHeight", "footRaiseHeight", "speedLevel", "gait"]
 
 @dataclass
 class BrainOutput:
@@ -176,7 +186,13 @@ class ProductionBrain:
             "ジャンプ": {"response": "前跳します", "api_code": 1031},
             "ポーズ": {"response": "ポーズします", "api_code": 1028},
         }
-        
+
+        # hot_cache に ASR かな変体を自動追加（KANA_ALIASES 唯一参照）
+        # 漢字キーが存在し、かなキーが未登録の場合のみ追加
+        for kana, kanji in self.KANA_ALIASES.items():
+            if kanji in self.hot_cache and kana not in self.hot_cache:
+                self.hot_cache[kana] = self.hot_cache[kanji]
+
         # 复杂序列检测关键词 - 扩展日语连接词
         self.sequence_keywords = [
             # 中文连接词
@@ -206,8 +222,23 @@ class ProductionBrain:
         # SafetyCompiler 在 compile() 中自动处理。
 
         # 状态监控器
+        # 硬件模式: 使用 SDKStateProvider（通过 SportClient RPC 查询，避免 DDS domain 冲突）
+        # 模拟模式: 使用 ROS2 state_monitor（没有 domain 冲突风险）
         self.state_monitor = None
-        if STATE_MONITOR_AVAILABLE:
+        if use_real_hardware and self.sport_client is not None and SDK_STATE_PROVIDER_AVAILABLE:
+            # 硬件模式 + SDK 可用: 跳过 ROS2 monitor，避免 rmw_create_node domain 冲突
+            try:
+                self.state_monitor = SDKStateProvider(
+                    rpc_call_fn=self._rpc_call,
+                    logger=self.logger,
+                )
+                self.state_monitor.start_polling(interval=2.0)
+                self.logger.info("SDK 状态提供器已启动（RPC 轮询, 间隔 2.0s）")
+            except Exception as e:
+                self.logger.warning(f"SDK 状态提供器启动失败: {e}")
+                self.state_monitor = None
+        elif not use_real_hardware and STATE_MONITOR_AVAILABLE:
+            # 模拟模式: 可以尝试 ROS2 monitor
             try:
                 self.state_monitor = create_system_state_monitor(
                     node_name="claudia_brain_monitor",
@@ -215,13 +246,15 @@ class ProductionBrain:
                 )
                 if self.state_monitor.initialize():
                     self.state_monitor.start_monitoring()
-                    self.logger.info("✅ 状态监控器已启动")
+                    self.logger.info("✅ ROS2 状态监控器已启动")
                 else:
-                    self.logger.warning("⚠️ 状态监控器初始化失败，使用默认状态")
+                    self.logger.warning("⚠️ ROS2 状态监控器初始化失败，使用默认状态")
             except Exception as e:
-                self.logger.warning(f"⚠️ 状态监控器不可用: {e}")
+                self.logger.warning(f"⚠️ ROS2 状态监控器不可用: {e}")
+                self.state_monitor = None
         else:
-            self.logger.warning("⚠️ 状态监控器模块不可用")
+            reason = "SDK不可用" if use_real_hardware else "状态监控模块不可用"
+            self.logger.warning(f"⚠️ 状态监控器未启动: {reason}")
 
         # 安全验证器（旧，deprecated — 保留供其他模块引用）
         if SAFETY_VALIDATOR_AVAILABLE:
@@ -269,7 +302,17 @@ class ProductionBrain:
             logger.addHandler(handler)
             logger.setLevel(logging.INFO)
         return logger
-    
+
+    def _kana_to_kanji(self, text):
+        """ASR かな出力を漢字正規化（KANA_ALIASES 唯一参照）
+
+        SEQUENCE_HOTPATH の substring match 前に適用。
+        hot_cache は __init__ で自動展開済みなので不要。
+        """
+        for kana, kanji in self.KANA_ALIASES.items():
+            text = text.replace(kana, kanji)
+        return text
+
     def _init_sport_client(self):
         """修复的SportClient初始化 - 包含正确的网络配置"""
         try:
@@ -279,13 +322,27 @@ class ProductionBrain:
             # 添加正确的路径
             sys.path.append('/home/m1ng/claudia')
             sys.path.append('/home/m1ng/claudia/unitree_sdk2_python')
-            
-            # 设置正确的环境变量 - 这是关键修复！
-            os.environ['CYCLONEDDS_HOME'] = '/home/m1ng/claudia/cyclonedds/install'
-            
+
+            # CycloneDDS 路径统一: 优先用环境变量，回退到项目目录
+            # 解决 start_production_brain.sh 和 setup_cyclonedds.sh 路径不一致问题
+            cyclone_home = os.environ.get('CYCLONEDDS_HOME', '')
+            if not cyclone_home or not os.path.isdir(cyclone_home):
+                # 按优先级尝试两个已知路径
+                candidates = [
+                    '/home/m1ng/claudia/cyclonedds/install',
+                    os.path.expanduser('~/cyclonedds/install'),
+                ]
+                for candidate in candidates:
+                    if os.path.isdir(candidate):
+                        cyclone_home = candidate
+                        break
+                else:
+                    cyclone_home = candidates[0]  # 最终 fallback
+            os.environ['CYCLONEDDS_HOME'] = cyclone_home
+
             # 设置LD_LIBRARY_PATH
             ld_path = os.environ.get('LD_LIBRARY_PATH', '')
-            cyclone_lib = '/home/m1ng/claudia/cyclonedds/install/lib'
+            cyclone_lib = os.path.join(cyclone_home, 'lib')
             unitree_lib = '/home/m1ng/claudia/cyclonedds_ws/install/unitree_sdk2/lib'
             
             if cyclone_lib not in ld_path:
@@ -312,18 +369,75 @@ class ProductionBrain:
             self.sport_client.SetTimeout(10.0)
             self.sport_client.Init()
             
-            # 测试连接 - 使用更可靠的命令
+            # 测试连接 - 使用只读 API，带重试（DDS 建立连接需要时间）
             import time
-            time.sleep(0.5)  # 给DDS一点时间建立连接
-            
-            # P0-5: 使用只读 API 测试连接（不再触发运动）
-            try:
+
+            # P0-5 + 重试: GetState 探测，3 次重试，递增等待
+            # Go2 固件要求全字段查询（单键查询返回空响应导致 JSON 解析失败）
+            test_result = None
+            probe_ok = False
+            MAX_PROBE_RETRIES = 3
+            for attempt in range(MAX_PROBE_RETRIES):
+                wait_sec = 1.0 + attempt * 1.0  # 1s, 2s, 3s
+                time.sleep(wait_sec)
                 try:
-                    test_result, _ = self.sport_client.GetState(["mode"])
-                except Exception:
-                    # 固件兼容 fallback: 无参数 GetState
-                    test_result, _ = self.sport_client.GetState([])
-                
+                    test_result, probe_data = self.sport_client.GetState(GETSTATE_FULL_KEYS)
+                    if self._is_valid_getstate_probe(test_result, probe_data):
+                        probe_ok = True
+                        self.logger.info(
+                            "   GetState 探测成功 (attempt {}/{})".format(
+                                attempt + 1, MAX_PROBE_RETRIES
+                            )
+                        )
+                        break  # 返回码+数据都有效，退出重试
+                    else:
+                        # RPC 返回了结果但不合格（code!=0 或 data 为空）
+                        if attempt < MAX_PROBE_RETRIES - 1:
+                            self.logger.info(
+                                "   GetState 第{}次探测: 返回码={}, 数据={}，{}s 后重试...".format(
+                                    attempt + 1, test_result,
+                                    'empty' if not probe_data else type(probe_data).__name__,
+                                    1.0 + (attempt + 1) * 1.0
+                                )
+                            )
+                        else:
+                            self.logger.warning(
+                                "   GetState 探测: {}次重试均返回无效结果 (code={})".format(
+                                    MAX_PROBE_RETRIES, test_result
+                                )
+                            )
+                except (json.JSONDecodeError, ValueError):
+                    # RPC 响应为空 — DDS 就绪但 sport 服务尚未完全初始化
+                    if attempt < MAX_PROBE_RETRIES - 1:
+                        self.logger.info(
+                            "   GetState 第{}次探测: 响应为空，{}s 后重试...".format(
+                                attempt + 1, 1.0 + (attempt + 1) * 1.0
+                            )
+                        )
+                    else:
+                        self.logger.warning("   GetState 探测: {}次重试均失败（JSON解析错误）".format(
+                            MAX_PROBE_RETRIES
+                        ))
+                        test_result = -1
+                except Exception as e:
+                    if attempt < MAX_PROBE_RETRIES - 1:
+                        self.logger.info(
+                            "   GetState 第{}次探测失败: {}，{}s 后重试...".format(
+                                attempt + 1, e, 1.0 + (attempt + 1) * 1.0
+                            )
+                        )
+                    else:
+                        self.logger.warning("   GetState 探测: {}次重试均失败: {}".format(
+                            MAX_PROBE_RETRIES, e
+                        ))
+                        test_result = -1
+
+            # 防止“code=0 + 空/无效data”被误判为连通成功
+            if not probe_ok and test_result == 0:
+                self.logger.warning("   GetState 探测返回 code=0 但数据无效，按失败处理")
+                test_result = -1
+
+            try:
                 # 分析返回码
                 if test_result == 0:
                     self.logger.info("✅ 真实SportClient初始化成功 - 机器人已连接")
@@ -373,6 +487,19 @@ class ProductionBrain:
             self.logger.info("   提示: 机器人可能未连接")
             self.logger.info("   使用MockSportClient模拟硬件")
             self._init_mock_client()
+
+    def _is_valid_getstate_probe(self, code: Any, data: Any) -> bool:
+        """GetState 连通性探测有效性判定。
+
+        合法条件:
+          - code == 0
+          - data 为非空 dict（Go2 固件返回结构化字段）
+        """
+        if code != 0:
+            return False
+        if not isinstance(data, dict):
+            return False
+        return len(data) > 0
     
     def _init_mock_client(self):
         """初始化模拟客户端"""
@@ -424,11 +551,60 @@ class ProductionBrain:
                         # SDK 恢复失败，至少保持跟踪值一致
                         self._current_timeout = previous_timeout
 
-    # === 紧急停止关键词（检查在获取锁之前）===
-    EMERGENCY_KEYWORDS = frozenset([
-        "止まれ", "止めて", "停止", "stop", "halt", "emergency",
-        "緊急停止", "やめて", "ストップ",
-    ])
+    # === ASR かな別名表（唯一定義点）===
+    # ASR 音声認識は漢字の代わりに仮名(ひらがな)を出力することがある。
+    # このマッピングで入力テキストを正規化し、hot_cache / SEQUENCE_HOTPATH /
+    # dance_commands のキーと一致させる。
+    # 新しい ASR かな覆盖を追加する場合はここだけ編集。
+    # key = ASR が出力しうる仮名形, value = マスター辞書のキー形（漢字含む）
+    KANA_ALIASES = {
+        # 基本動作
+        "すわって": "座って",
+        "たって": "立って",
+        "ふせる": "伏せる",
+        "よこになる": "横になる",
+        # 表演動作
+        "あいさつ": "挨拶",
+        "のび": "伸び",
+        "おどって": "踊って",
+        "おどる": "踊る",
+        # 特例
+        "おじぎ": "お辞儀",
+        "れい": "礼",
+        "ひしん": "比心",
+        # 対話パターン（_generate_conversational_response 用）
+        "なまえ": "名前",
+        "だれ": "誰",
+        "きみ": "君",
+    }
+
+    # === 紧急停止命令（唯一真源）===
+    # process_and_execute / process_command 共同引用此 dict。
+    # key = 命令文本（strip().lower() 后匹配），value = 日语响应。
+    # 所有 key 统一映射到 StopMove(1003)，由 _handle_emergency() 执行。
+    # 包含 ASR かな变体（とまれ/とめて/ていし/きんきゅうていし）。
+    EMERGENCY_COMMANDS = {
+        # 日语（漢字）
+        "止まれ": "止まります",
+        "止めて": "止まります",
+        "止まって": "止まります",
+        "緊急停止": "緊急停止しました",
+        "やめて": "止まります",
+        # 日语（ASR かな変体）
+        "とまれ": "止まります",
+        "とめて": "止まります",
+        "とまって": "止まります",
+        "きんきゅうていし": "緊急停止しました",
+        # カタカナ
+        "ストップ": "止まります",
+        # 英语
+        "stop": "止まります",
+        "halt": "止まります",
+        "emergency": "緊急停止しました",
+        # 中文
+        "停止": "止まります",
+        "停下": "止まります",
+    }
 
     async def process_and_execute(self, command):
         # type: (str) -> BrainOutput
@@ -437,7 +613,7 @@ class ProductionBrain:
         紧急指令绕过锁直接执行，普通指令在锁内串行处理。
         """
         cmd_lower = command.strip().lower()
-        if cmd_lower in self.EMERGENCY_KEYWORDS:
+        if cmd_lower in self.EMERGENCY_COMMANDS:
             return await self._handle_emergency(command)
 
         async with self._command_lock:
@@ -494,7 +670,7 @@ class ProductionBrain:
             model_used="bypass",
             current_state=None,
             llm_output=None,
-            safety_verdict="bypass",
+            safety_verdict="emergency_bypass",
         )
         return output
 
@@ -702,25 +878,25 @@ class ProductionBrain:
             True表示对话查询，False表示动作命令
         """
         cmd = command.strip().lower()
+        # ASR かな正規化: "おなまえは" → "お名前は" → '名前' にマッチ
+        cmd = self._kana_to_kanji(cmd)
 
         # 对话型关键词模式
         CONVERSATIONAL_PATTERNS = [
             # 日语（褒め言葉は hot_cache へ移動: かわいい/すごい → Heart(1036)）
+            # 友好问候も hot_cache へ移動: おはよう/こんばんは etc. → Hello(1016)
             'あなた', '君', 'きみ', '名前', 'なまえ', '誰', 'だれ',
             '何', 'なに', 'どう', 'なぜ', 'いつ', 'どこ',
             'ありがとう', 'ごめん',
-            'おはよう', 'こんばんは', 'さようなら', 'おやすみ',
-            # 英语 (cute moved to hot_cache → Heart)
+            # 英语 (cute moved to hot_cache → Heart, greetings moved to hot_cache → Hello)
             'who are you', 'what is your name', 'your name',
             'who', 'what', 'why', 'when', 'where', 'how',
             'you are', "you're", 'thank you', 'thanks', 'sorry',
-            'good morning', 'good evening', 'good night', 'goodbye',
             'cool', 'awesome', 'nice',
-            # 中文 (可爱 moved to hot_cache → Heart)
+            # 中文 (可爱 moved to hot_cache → Heart, 问候 moved to hot_cache → Hello)
             '你是', '你叫', '你的名字', '谁', '什么', '为什么',
             '怎么', '哪里', '什么时候',
             '厉害', '谢谢', '对不起',
-            '早上好', '晚上好', '晚安', '再见',
         ]
 
         # 检查是否包含对话关键词
@@ -741,34 +917,19 @@ class ProductionBrain:
             友好的对话回复
         """
         cmd = command.strip().lower()
+        # ASR かな正規化: "おなまえは" → "お名前は" → '名前' にマッチ
+        cmd = self._kana_to_kanji(cmd)
 
         # 名字/身份相关
         if any(k in cmd for k in ['あなた', '誰', '名前', 'who', 'your name', '你是', '你叫']):
             return "私はClaudiaです。Unitree Go2のAIアシスタントです。"
 
-        # 赞美相关
-        if any(k in cmd for k in ['可愛い', 'かわいい', 'cute', '可爱']):
-            return "ありがとうございます！"
+        # 赞美相关 → hot_cache (Heart 1036) で処理済み
+        # 问候相关 → hot_cache (Hello 1016) で処理済み
 
-        if any(k in cmd for k in ['すごい', '凄い', 'cool', 'awesome', '厉害']):
-            return "ありがとうございます！頑張ります。"
-
-        # 感谢相关
+        # 感谢相关（CONVERSATIONAL_PATTERNS に残留、hot_cache 対象外）
         if any(k in cmd for k in ['ありがとう', 'thank', '谢谢']):
             return "どういたしまして！"
-
-        # 问候相关
-        if any(k in cmd for k in ['おはよう', 'good morning', '早上好']):
-            return "おはようございます！"
-
-        if any(k in cmd for k in ['こんばんは', 'good evening', '晚上好']):
-            return "こんばんは！"
-
-        if any(k in cmd for k in ['おやすみ', 'good night', '晚安']):
-            return "おやすみなさい！"
-
-        if any(k in cmd for k in ['さようなら', 'goodbye', 'bye', '再见']):
-            return "さようなら！またね。"
 
         # 默认对话回复
         return "はい、何でしょうか？"
@@ -847,7 +1008,11 @@ class ProductionBrain:
                 input_command=command,
                 state_battery=current_state.battery_level if current_state else None,
                 state_standing=current_state.is_standing if current_state else None,
-                state_emergency=current_state.state.name == "EMERGENCY" if current_state else None,
+                state_emergency=(
+                    hasattr(current_state, 'state')
+                    and current_state.state is not None
+                    and getattr(current_state.state, 'name', '') == "EMERGENCY"
+                ) if current_state else None,
                 llm_output=llm_output,
                 api_code=output.api_code,
                 sequence=output.sequence,
@@ -877,43 +1042,86 @@ class ProductionBrain:
             raw_batt = state_snapshot.battery_level
             state_snapshot.battery_level = self._normalize_battery(raw_batt)
 
-            # P0-3: 仅在 ROS2 未真正初始化时使用内部姿态跟踪
-            ros_initialized = (
-                self.state_monitor
-                and hasattr(self.state_monitor, 'is_ros_initialized')
-                and self.state_monitor.is_ros_initialized
-            )
-            if not ros_initialized:
-                state_snapshot.is_standing = self.last_posture_standing
-
-            self.logger.info(
-                "状态快照: 电池{:.0f}%, 姿态{}".format(
-                    state_snapshot.battery_level * 100 if state_snapshot.battery_level else 0,
-                    '站立' if state_snapshot.is_standing else '非站立'
+            # 状态来源检查: 按 source 分层信任
+            state_source = getattr(state_snapshot, 'source', 'unknown')
+            if state_source == 'simulation':
+                # 模拟数据完全不可信: battery=0.85/is_standing=True 是假值
+                # fail-safe: is_standing=False，让 SafetyCompiler 自动前插 StandUp
+                state_snapshot.is_standing = False
+                state_snapshot.battery_level = 0.50  # 保守值，限制高能动作
+                self.logger.warning(
+                    "状态快照: 来源=simulation（不可靠），电池未知(安全默认50%), 姿态非站立(fail-safe)"
                 )
-            )
+            elif state_source == 'sdk':
+                # SDK 真实数据: 直接信任 mode→is_standing 和 battery
+                # 不走 ros_initialized 覆盖分支（SDK 就是真实硬件数据）
+                self.logger.info(
+                    "状态快照: 来源=sdk, 电池{:.0f}%, 姿态{}".format(
+                        state_snapshot.battery_level * 100 if state_snapshot.battery_level else 0,
+                        '站立' if state_snapshot.is_standing else '非站立'
+                    )
+                )
+            elif state_source == 'sdk_partial':
+                # SDK 部分数据: 按 state_ok/battery_ok 细粒度信任
+                has_state = getattr(state_snapshot, 'state_ok', False)
+                has_battery = getattr(state_snapshot, 'battery_ok', False)
+                if not has_state:
+                    # 姿态不可用 → fail-safe: 假定未站立，让 SafetyCompiler 前插 StandUp
+                    state_snapshot.is_standing = False
+                # 如果 battery_ok=False，保持 SDKStateSnapshot 的默认值 0.5
+                battery_desc = (
+                    "电池{:.0f}%".format(
+                        state_snapshot.battery_level * 100 if state_snapshot.battery_level else 0
+                    )
+                    if has_battery else "电池未知(安全默认50%)"
+                )
+                self.logger.info(
+                    "状态快照: 来源=sdk_partial (state={}, battery={}), {}, 姿态{}{}".format(
+                        'ok' if has_state else 'fail',
+                        'ok' if has_battery else 'fail',
+                        battery_desc,
+                        '站立' if state_snapshot.is_standing else '非站立',
+                        '(fail-safe)' if not has_state else '',
+                    )
+                )
+            elif state_source == 'sdk_fallback':
+                # SDK 全部失败: 姿态和电量都用保守值
+                # fail-safe: is_standing=False，让 SafetyCompiler 自动前插 StandUp
+                state_snapshot.is_standing = False
+                self.logger.info(
+                    "状态快照: 来源=sdk_fallback, 电池未知(安全默认50%), 姿态非站立(fail-safe)"
+                )
+            else:
+                # ROS2 state_monitor 或 unknown
+                ros_initialized = (
+                    self.state_monitor
+                    and hasattr(self.state_monitor, 'is_ros_initialized')
+                    and self.state_monitor.is_ros_initialized
+                )
+                if not ros_initialized:
+                    state_snapshot.is_standing = self.last_posture_standing
+                self.logger.info(
+                    "状态快照: 来源={}, 电池{:.0f}%, 姿态{}".format(
+                        state_source,
+                        state_snapshot.battery_level * 100 if state_snapshot.battery_level else 0,
+                        '站立' if state_snapshot.is_standing else '非站立'
+                    )
+                )
 
-        # 0. 紧急指令快速通道（绕过LLM，修复REVIEW问题）
-        EMERGENCY_BYPASS = {
-            "緊急停止": {"response": "緊急停止しました", "api_code": 1003},
-            "stop": {"response": "止まります", "api_code": 1003},
-            "停止": {"response": "止まります", "api_code": 1003},
-            "やめて": {"response": "止まります", "api_code": 1003},
-            "ストップ": {"response": "止まります", "api_code": 1003},
-        }
-        if command.strip() in EMERGENCY_BYPASS:
-            cached = EMERGENCY_BYPASS[command.strip()]
+        # 0. 紧急指令快速通道 — 引用 EMERGENCY_COMMANDS 唯一真源
+        cmd_emergency = command.strip().lower()
+        if cmd_emergency in self.EMERGENCY_COMMANDS:
             elapsed = (time.time() - start_time) * 1000
-            self.logger.info(f"🚨 紧急指令旁路 ({elapsed:.0f}ms)")
+            self.logger.info("紧急指令旁路 ({:.0f}ms)".format(elapsed))
             output = BrainOutput(
-                response=cached["response"],
-                api_code=cached["api_code"]
+                response=self.EMERGENCY_COMMANDS[cmd_emergency],
+                api_code=1003,
+                reasoning="emergency_bypass",
             )
-            # 记录审计日志
             self._log_audit(command, output, route=ROUTE_EMERGENCY, elapsed_ms=elapsed,
                           cache_hit=False, model_used="bypass",
                           current_state=None, llm_output=None,
-                          safety_verdict="bypass")
+                          safety_verdict="emergency_bypass")
             return output
 
         # ===== 2) 安全预检 — DEPRECATED (SafetyCompiler 统一处理) =====
@@ -1029,8 +1237,10 @@ class ProductionBrain:
             '坐下然后问好': [1009, 1016],
         }
 
+        # ASR かな正規化: "たってからあいさつ" → "立ってから挨拶"
+        cmd_normalized = self._kana_to_kanji(cmd_lower)
         for key, seq in SEQUENCE_HOTPATH.items():
-            if key in cmd_lower:
+            if key in cmd_normalized:
                 self.logger.info("序列预定义命中: {} -> {}".format(key, seq))
 
                 # P0-9: 序列路径必须走 SafetyCompiler（旧版无安全检查）
@@ -1101,7 +1311,7 @@ class ProductionBrain:
             return dialog_output
 
         # 0.5. 特殊命令处理 - 舞蹈随机选择 → SafetyCompiler
-        dance_commands = ["dance", "ダンス", "跳舞", "舞蹈", "踊る", "踊って"]
+        dance_commands = ["dance", "ダンス", "跳舞", "舞蹈", "踊る", "踊って", "おどる", "おどって"]
         if command.lower() in dance_commands:
             dance_choice = random.choice([1022, 1023])
             dance_name = "1" if dance_choice == 1022 else "2"
@@ -1249,8 +1459,14 @@ class ProductionBrain:
             api_code=None,
         )
     
-    async def execute_action(self, brain_output: BrainOutput) -> bool:
-        """执行动作"""
+    async def execute_action(self, brain_output: BrainOutput) -> Union[bool, str]:
+        """执行动作
+
+        Returns:
+            True — 成功
+            "unknown" — 超时但机器人可达（动作可能仍在执行）
+            False — 失败
+        """
         # 检查硬件模式和SportClient状态
         if self.use_real_hardware and self.sport_client:
             self.logger.info("🤖 使用真实硬件执行")
@@ -1276,14 +1492,76 @@ class ProductionBrain:
         
         return False
     
-    async def _execute_real(self, brain_output):
-        # type: (BrainOutput) -> Any
+    async def _verify_standing_after_unknown(self, max_retries=3, interval=1.0):
+        """StandUp 返回 unknown(3104) 后，通过 GetState 短轮询验证站立状态
+
+        Go2 StandUp 动画通常 2-3s，3104 超时后短延时+查询可确认。
+        用于序列执行中 StandUp 作为前置条件时：必须确认站立后才能执行后续动作。
+
+        Returns:
+            True — GetState 确认 mode 在 STANDING_MODES 中
+            False — 重试耗尽仍未确认站立
+        """
+        # 与 SDKStateProvider.STANDING_MODES 保持一致
+        STANDING_MODES = {1, 2, 3, 4, 5, 6, 7, 8, 9}
+        for attempt in range(max_retries):
+            await asyncio.sleep(interval)
+            try:
+                result = self._rpc_call(
+                    "GetState", GETSTATE_FULL_KEYS, timeout_override=3.0
+                )
+                if isinstance(result, tuple) and len(result) >= 2:
+                    code, data = result[0], result[1]
+                    if code == 0 and isinstance(data, dict):
+                        mode = data.get("state", data.get("mode", -1))
+                        if isinstance(mode, (int, float)):
+                            mode = int(mode)
+                            if mode in STANDING_MODES:
+                                self.logger.info(
+                                    "   GetState 确认站立 (mode={}, attempt {}/{})".format(
+                                        mode, attempt + 1, max_retries
+                                    )
+                                )
+                                return True
+                            else:
+                                self.logger.info(
+                                    "   GetState 未站立 (mode={}, attempt {}/{})".format(
+                                        mode, attempt + 1, max_retries
+                                    )
+                                )
+            except Exception as e:
+                self.logger.warning(
+                    "   GetState 查询失败 (attempt {}/{}): {}".format(
+                        attempt + 1, max_retries, e
+                    )
+                )
+        self.logger.warning("   StandUp 确认超时: {} 次重试后仍未站立".format(max_retries))
+        return False
+
+    def _update_posture_tracking(self, api_code):
+        """更新内部姿态跟踪 — 仅在动作确认成功后调用
+
+        此方法只在 _execute_real() 中 result==0 或 result==-1 时调用，
+        确保 unknown(3104) 或失败不会污染 last_posture_standing 状态。
+        3104 = RPC 超时（动作可能仍在执行），不能视为已完成。
+        """
+        if api_code == 1004:  # StandUp
+            self.robot_state = "standing"
+            self.last_posture_standing = True
+        elif api_code == 1009:  # Sit
+            self.robot_state = "sitting"
+            self.last_posture_standing = False
+        elif api_code == 1005:  # StandDown
+            self.robot_state = "lying"
+            self.last_posture_standing = False
+
+    async def _execute_real(self, brain_output: BrainOutput) -> Union[bool, str]:
         """真实执行（使用 _rpc_call + registry METHOD_MAP）
 
         Returns:
-            True/"success" — 成功
+            True — 成功
             "unknown" — 3104 超时但机器人可达（动作可能仍在执行）
-            False/"failed" — 失败
+            False — 失败
         """
         try:
             # P0-8: 序列中间失败则中止（不再静默继续）
@@ -1299,6 +1577,22 @@ class ProductionBrain:
                             )
                         )
                         return False
+                    # StandUp(1004) 返回 unknown 时：后续动作可能需要站立，
+                    # 必须通过 GetState 确认站立状态后才能继续序列
+                    if success == "unknown" and api == 1004:
+                        has_subsequent = i + 1 < len(brain_output.sequence)
+                        if has_subsequent:
+                            standing_ok = await self._verify_standing_after_unknown()
+                            if not standing_ok:
+                                self.logger.error(
+                                    "序列中止: StandUp(1004) unknown 后无法确认站立，"
+                                    "后续动作 {} 需要站立状态".format(
+                                        brain_output.sequence[i + 1:]
+                                    )
+                                )
+                                return False
+                            # 确认站立 → 更新姿态跟踪
+                            self._update_posture_tracking(1004)
                     await asyncio.sleep(1)
                 return True
 
@@ -1317,12 +1611,18 @@ class ProductionBrain:
             # 使用 _rpc_call 统一调用（线程安全 + 超时管理）
             self.logger.info("执行: {} (API:{})".format(method_name, brain_output.api_code))
 
+            # 长时间动作: 增加 RPC 超时（Dance/Scrape/Heart 等动画 ~10-20s）
+            LONG_RUNNING_ACTIONS = {1022, 1023, 1029, 1036}  # Dance1, Dance2, Scrape, Heart
+            timeout_kw = {}
+            if brain_output.api_code in LONG_RUNNING_ACTIONS:
+                timeout_kw["timeout_override"] = 25.0
+
             # 参数化动作使用 SAFE_DEFAULT_PARAMS
             if brain_output.api_code in SAFE_DEFAULT_PARAMS:
                 params = SAFE_DEFAULT_PARAMS[brain_output.api_code]
-                result = self._rpc_call(method_name, *params)
+                result = self._rpc_call(method_name, *params, **timeout_kw)
             else:
-                result = self._rpc_call(method_name)
+                result = self._rpc_call(method_name, **timeout_kw)
 
             # 处理元组返回值（如 GetState 返回 (code, data)）
             if isinstance(result, tuple):
@@ -1330,39 +1630,38 @@ class ProductionBrain:
 
             self.logger.info("   返回码: {}".format(result))
 
-            # 更新姿态跟踪
-            if brain_output.api_code == 1004:  # StandUp
-                self.robot_state = "standing"
-                self.last_posture_standing = True
-            elif brain_output.api_code == 1009:  # Sit
-                self.robot_state = "sitting"
-                self.last_posture_standing = False
-            elif brain_output.api_code == 1005:  # StandDown
-                self.robot_state = "lying"
-                self.last_posture_standing = False
-
             self.last_executed_api = brain_output.api_code
 
             # P0-1: 修复 3104 误判（超时 != 成功）
+            # 姿态跟踪仅在确认成功后更新，避免 unknown/失败污染内部状态
             if result == 0:
+                self._update_posture_tracking(brain_output.api_code)
                 return True
             elif result == -1:  # 已处于目标状态
+                self._update_posture_tracking(brain_output.api_code)
                 return True
             elif result == 3104:  # RPC_ERR_CLIENT_API_TIMEOUT
                 self.logger.warning("   动作响应超时 (3104)")
+                # 长时间动作（Dance/FrontFlip 等）经常触发 3104:
+                # 动作已发送到机器人并在执行中，只是 RPC 响应超时。
+                # 连通性确认: 用正确的 key "state"（非 "mode"）
                 try:
                     state_code, _ = self._rpc_call(
-                        "GetState", ["mode"], timeout_override=3.0
+                        "GetState", GETSTATE_FULL_KEYS, timeout_override=3.0
                     )
                     if state_code == 0:
-                        self.logger.warning("   连通性确认OK，动作可能仍在执行")
+                        self.logger.info("   连通性确认OK，动作仍在执行中")
                         return "unknown"
                     else:
-                        self.logger.error("   连通性异常 ({})".format(state_code))
-                        return False
+                        self.logger.warning("   连通性异常 ({}), 但动作可能已执行".format(state_code))
+                        return "unknown"  # 3104 本身说明命令已发送，不应判定为失败
+                except (json.JSONDecodeError, ValueError):
+                    # GetState RPC 也可能超时（机器人忙于执行动作）
+                    self.logger.info("   连通性探测超时（机器人可能忙于执行动作）")
+                    return "unknown"
                 except Exception as e:
-                    self.logger.error("   连通性确认失败: {}".format(e))
-                    return False
+                    self.logger.warning("   连通性确认异常: {}".format(e))
+                    return "unknown"  # 3104 说明命令已发出，保守判定为 unknown
             else:
                 # P0-2: 修复 3103 注释和日志
                 if result == 3103:

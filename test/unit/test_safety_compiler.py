@@ -393,6 +393,24 @@ class TestSequenceCompilation:
         assert not v.is_blocked
         assert v.executable_sequence == [1004, 1023]  # 1030 降级为 1023
 
+    def test_mid_posture_transition_inserts_standup_for_following_action(self):
+        """序列中间姿态切换: Sit 后接 Hello → 需在中间插入 StandUp"""
+        sc = make_compiler()
+        # 初始已站立:
+        # 1009(Sit) 执行后变为非站立，后续 1016(Hello) requires_standing
+        # 应在中间插入 1004，而不是只在头部插一次。
+        v = sc.compile([1009, 1016], battery_level=0.80, is_standing=True)
+        assert not v.is_blocked
+        assert v.executable_sequence == [1009, 1004, 1016]
+
+    def test_mid_posture_transition_after_standdown_inserts_standup(self):
+        """序列中间姿态切换: StandDown 后接 Heart → 需在中间插入 StandUp"""
+        sc = make_compiler()
+        # 1005(StandDown) 执行后为非站立，1036(Heart) requires_standing
+        v = sc.compile([1005, 1036], battery_level=0.80, is_standing=True)
+        assert not v.is_blocked
+        assert v.executable_sequence == [1005, 1004, 1036]
+
     def test_empty_actions(self):
         """空动作列表 → 空结果，不 blocked"""
         sc = make_compiler()

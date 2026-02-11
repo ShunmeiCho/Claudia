@@ -34,11 +34,16 @@ try:
     except ImportError:
         # 备用消息定义
         UNITREE_MSGS_AVAILABLE = False
-        print("⚠️ Unitree消息类型导入失败，使用模拟模式")
+        # 不打印警告 — 硬件模式使用 SDKStateProvider 获取状态，
+        # 不依赖 ROS2 消息类型。仅在实际需要 ROS2 监控时才报错。
+        logging.getLogger("SystemStateMonitor").debug(
+            "Unitree ROS2 消息类型不可用（LowState/SportModeState/BmsState），"
+            "硬件模式将使用 SDK 直连"
+        )
     
     ROS2_AVAILABLE = True
 except ImportError as e:
-    print(f"⚠️ ROS2导入失败: {e}")
+    logging.getLogger("SystemStateMonitor").debug("ROS2 导入失败: %s", e)
     ROS2_AVAILABLE = False
 
 class SystemState(IntEnum):

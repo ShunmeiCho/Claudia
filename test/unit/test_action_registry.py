@@ -89,6 +89,13 @@ class TestDerivedSets:
         expected = {a.api_code for a in _ACTIONS if a.requires_standing}
         assert REQUIRE_STANDING == expected
 
+    def test_sit_1009_explicitly_requires_standing(self):
+        """策略约束: Sit(1009) 明确要求站立前置"""
+        assert 1009 in REQUIRE_STANDING, (
+            "Sit(1009) 应在 REQUIRE_STANDING 中，"
+            "用于不可信状态下触发 SafetyCompiler 自动前插 StandUp"
+        )
+
     def test_high_energy_matches(self):
         """HIGH_ENERGY_ACTIONS 与 risk_level='high' 一致"""
         expected = {a.api_code for a in _ACTIONS if a.risk_level == "high"}

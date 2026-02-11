@@ -8,9 +8,17 @@
 import sys
 sys.path.insert(0, '/home/m1ng/claudia')
 
+import pytest
 from dataclasses import dataclass
 from src.claudia.brain.production_brain import ProductionBrain
 from src.claudia.brain.safety_validator import SafetyValidator
+
+# PR1: _try_hotpath / _final_safety_gate は SafetyCompiler に置換済み。
+# 等価テストは test_safety_compiler.py にて実施。
+_SKIP_REASON = (
+    "PR1 DEPRECATED: _try_hotpath/_final_safety_gate removed, "
+    "replaced by SafetyCompiler (see test_safety_compiler.py)"
+)
 
 
 @dataclass
@@ -25,6 +33,7 @@ class MockSystemStateInfo:
     state: State = State()
 
 
+@pytest.mark.skip(reason=_SKIP_REASON)
 def test_hotpath_detection():
     """测试热路径命中检测"""
     print("=" * 60)
@@ -126,6 +135,7 @@ def test_safety_validator_standing_requirement():
         print(f"  ⚠️  is_safe={result.is_safe}, modified={result.modified_sequence}")
 
 
+@pytest.mark.skip(reason=_SKIP_REASON)
 def test_hotpath_with_battery_gate():
     """测试热路径与最终安全门集成"""
     print("\n" + "=" * 60)
@@ -160,6 +170,7 @@ def test_hotpath_with_battery_gate():
         print(f"  ❌ 期望{hotpath_api}但返回了{safe_api}")
 
 
+@pytest.mark.skip(reason=_SKIP_REASON)
 def test_integrated_hotpath_safety():
     """综合测试：热路径 + SafetyValidator + 最终安全门"""
     print("\n" + "=" * 60)
