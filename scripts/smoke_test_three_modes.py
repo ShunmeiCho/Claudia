@@ -49,15 +49,21 @@ def create_brain(mode):
         is_standing=True,
         is_moving=False,
         temperature=40.0,
-        timestamp=0.0,
+        timestamp=time.monotonic(),
         source="smoke_test",       # 明确标识数据来源
         confidence=1.0,
         current_gait="unknown",
         network_status="unknown",
         sdk_connection=False,
     )
+
+    def _get_current_state():
+        # 避免安全编译器将模拟状态误判为 stale
+        mock_state.timestamp = time.monotonic()
+        return mock_state
+
     mock_monitor = SimpleNamespace(
-        get_current_state=lambda: mock_state,
+        get_current_state=_get_current_state,
         is_ros_initialized=True,
     )
     brain.state_monitor = mock_monitor
@@ -97,6 +103,11 @@ TEST_CASES = [
     ("ストレッチして", "any_action", "ストレッチして → LLM (expect Stretch)", False),
     ("元気を出して", "any", "元気を出して → LLM (expect action/conv)", False),
     ("今日の天気は？", "conversational", "今日の天気は？ → LLM (expect conv)", False),
+
+    # --- PR2: Modelfile 対齐验证（新增動作 + 参数化拒绝）---
+    ("転がって", "any_action", "転がって → LLM (expect 1021 Wallow)", False),
+    ("腰を振って", "any_action", "腰を振って → LLM (expect 1033 WiggleHips)", False),
+    ("歩いて", "conversational", "歩いて → LLM (expect a:null 参数化拒绝)", False),
 ]
 
 

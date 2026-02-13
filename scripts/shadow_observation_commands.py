@@ -219,15 +219,21 @@ def create_brain(hardware=False):
             is_standing=True,
             is_moving=False,
             temperature=40.0,
-            timestamp=0.0,
+            timestamp=time.monotonic(),
             source="shadow_observation",
             confidence=1.0,
             current_gait="unknown",
             network_status="unknown",
             sdk_connection=False,
         )
+
+        def _get_current_state():
+            # 避免长批次运行时触发 stale-state 安全拒绝
+            mock_state.timestamp = time.monotonic()
+            return mock_state
+
         mock_monitor = SimpleNamespace(
-            get_current_state=lambda: mock_state,
+            get_current_state=_get_current_state,
             is_ros_initialized=True,
         )
         brain.state_monitor = mock_monitor
