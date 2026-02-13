@@ -67,7 +67,7 @@ source install/setup.bash
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp   # Required for Go2 DDS
 export CYCLONEDDS_URI='...'                     # eth0 network interface config
 export PYTHONPATH=/home/m1ng/claudia/unitree_sdk2_python:$PYTHONPATH  # SDK imports
-export BRAIN_MODEL_7B=claudia-go2-7b:v12.2-complete  # Override LLM model
+export BRAIN_MODEL_7B=claudia-7b:v2.0  # Override LLM model
 
 # PR2: Dual-channel routing
 export BRAIN_ROUTER_MODE=legacy   # "legacy" (default) | "dual" | "shadow"
@@ -111,7 +111,7 @@ execution_status: "success" | "unknown" | "failed" | "skipped"
 
 - **Atomic entry point**: `process_and_execute()` handles process + execute + status in one call. Direct `process_command()` calls emit deprecation warning via `contextvars.ContextVar`
 - **Dual-channel routing** (PR2): `ChannelRouter` in `channel_router.py` is **decision-only** — never executes or calls SafetyCompiler. Three modes via `BRAIN_ROUTER_MODE` env var (default: `legacy`)
-- **Single 7B model** (legacy): `claudia-go2-7b:v12.2-complete`, configurable via `BRAIN_MODEL_7B` env var
+- **Single 7B model** (legacy): `claudia-7b:v2.0`, configurable via `BRAIN_MODEL_7B` env var
 - **Action model** (dual/shadow): `claudia-action-v1`, `num_predict=30`, `temperature=0.0`, outputs only `{"a":N}` or `{"s":[...]}` or `{"a":null}`
 - **Ollama JSON mode**: `format='json'` with `temperature=0.0` for deterministic output
 - **Graceful fallback chain**: Real SportClient → MockSportClient → simulation mode. Error 3103 (sport mode occupied by Unitree app) auto-falls back to mock.
