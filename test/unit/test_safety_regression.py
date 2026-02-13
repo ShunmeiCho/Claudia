@@ -607,6 +607,77 @@ class TestHotCacheE2ERouting:
         assert result.api_code == 1016
 
 
+class TestBowActionMapping:
+    """鞠躬/拜年动作映射回归 — ちんちん/お辞儀/拜年 统一映射到 Scrape(1029)
+
+    Scrape(1029) 在 Go2 上执行前爪鞠躬动作，语义上对应 作揖/拜年/お辞儀。
+    Hello(1016) 是挥手动作，不是鞠躬。确保所有鞠躬语义词一致映射到 1029。
+    """
+
+    def _make_brain(self):
+        brain, BrainOutput = _make_lightweight_brain()
+        brain.sport_client = None
+        mock_state = MagicMock()
+        mock_state.battery_level = 0.80
+        mock_state.is_standing = True
+        mock_state.is_moving = False
+        mock_state.temperature = 40.0
+        mock_state.timestamp = 0.0
+        mock_monitor = MagicMock()
+        mock_monitor.get_current_state.return_value = mock_state
+        mock_monitor.is_ros_initialized = True
+        brain.state_monitor = mock_monitor
+        return brain, BrainOutput
+
+    def test_chinchin_routes_to_scrape(self):
+        """'ちんちん' → hot_cache → Scrape(1029)"""
+        brain, _ = self._make_brain()
+        result = _run_async(brain.process_command("ちんちん"))
+        assert result.api_code == 1029, (
+            "ちんちん 应路由到 Scrape(1029)，实际: api_code={}".format(result.api_code)
+        )
+
+    def test_chinchin_katakana_routes_to_scrape(self):
+        """'チンチン' (片假名) → hot_cache → Scrape(1029)"""
+        brain, _ = self._make_brain()
+        result = _run_async(brain.process_command("チンチン"))
+        assert result.api_code == 1029, (
+            "チンチン 应路由到 Scrape(1029)，实际: api_code={}".format(result.api_code)
+        )
+
+    def test_bainian_routes_to_scrape(self):
+        """'拜年' (中文) → hot_cache → Scrape(1029)"""
+        brain, _ = self._make_brain()
+        result = _run_async(brain.process_command("拜年"))
+        assert result.api_code == 1029, (
+            "拜年 应路由到 Scrape(1029)，实际: api_code={}".format(result.api_code)
+        )
+
+    def test_ojigi_routes_to_scrape(self):
+        """'お辞儀' → hot_cache → Scrape(1029)"""
+        brain, _ = self._make_brain()
+        result = _run_async(brain.process_command("お辞儀"))
+        assert result.api_code == 1029, (
+            "お辞儀 应路由到 Scrape(1029)，实际: api_code={}".format(result.api_code)
+        )
+
+    def test_rei_routes_to_scrape(self):
+        """'礼' → hot_cache → Scrape(1029)"""
+        brain, _ = self._make_brain()
+        result = _run_async(brain.process_command("礼"))
+        assert result.api_code == 1029, (
+            "礼 应路由到 Scrape(1029)，实际: api_code={}".format(result.api_code)
+        )
+
+    def test_chinchin_with_punctuation_routes_to_scrape(self):
+        """'ちんちん！' → rstrip punctuation → hot_cache → Scrape(1029)"""
+        brain, _ = self._make_brain()
+        result = _run_async(brain.process_command("ちんちん！"))
+        assert result.api_code == 1029, (
+            "ちんちん！ 应通过标点归一化命中 hot_cache，实际: api_code={}".format(result.api_code)
+        )
+
+
 class TestEmergencyAliasRouting:
     """紧急词统一入口（EMERGENCY_COMMANDS）回归"""
 

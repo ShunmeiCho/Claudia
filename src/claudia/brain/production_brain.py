@@ -187,8 +187,8 @@ class ProductionBrain:
             "cute": {"response": "ありがとう！ハートします", "api_code": 1036},
 
             # === 特例词（容易误解）===
-            "お辞儀": {"response": "お辞儀します", "api_code": 1016},  # 鞠躬/拜年用Hello而非前空翻
-            "礼": {"response": "お辞儀します", "api_code": 1016},
+            "お辞儀": {"response": "お辞儀します", "api_code": 1029},  # 鞠躬动作 → Scrape(前爪鞠躬)
+            "礼": {"response": "お辞儀します", "api_code": 1029},
             "ジャンプ": {"response": "前跳します", "api_code": 1031},
             "ポーズ": {"response": "ポーズします", "api_code": 1028},
         }
