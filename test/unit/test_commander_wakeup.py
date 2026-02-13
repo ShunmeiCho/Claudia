@@ -234,6 +234,7 @@ class TestWakeupAudit:
                 assert entry.input_command == "__wakeup__"
                 assert entry.success is True
                 assert entry.sequence == [1004, 1017]
+                assert entry.safety_verdict == "ok"
 
     def test_audit_logged_on_standup_failure(self):
         """StandUp 失败后也记录审计"""
@@ -249,6 +250,67 @@ class TestWakeupAudit:
                 mock_audit.log_entry.assert_called_once()
                 entry = mock_audit.log_entry.call_args[0][0]
                 assert entry.success is False
+                assert entry.safety_verdict == "standup_failed"
+                assert "3103" in entry.safety_reason
+
+    def test_audit_3104_confirmed_standing_is_success(self):
+        """3104 + _verify_standing_after_unknown=True → audit success=True
+
+        核心回归保护: standup_confirmed 语义修复的验证网。
+        """
+        cmd = _make_commander()
+        cmd.brain._rpc_call.side_effect = [3104, 0]  # StandUp=3104, Stretch=0
+        cmd.brain._verify_standing_after_unknown = AsyncMock(return_value=True)
+        with patch('production_commander.asyncio.sleep', new_callable=AsyncMock):
+            with patch(
+                'claudia.brain.audit_logger.get_audit_logger'
+            ) as mock_get:
+                mock_audit = MagicMock()
+                mock_get.return_value = mock_audit
+                _run(cmd._wakeup_animation())
+                mock_audit.log_entry.assert_called_once()
+                entry = mock_audit.log_entry.call_args[0][0]
+                assert entry.success is True
+                assert entry.safety_verdict == "ok"
+                assert entry.sequence == [1004, 1017]
+
+    def test_audit_3104_unconfirmed_is_failure(self):
+        """3104 + _verify_standing_after_unknown=False → audit success=False"""
+        cmd = _make_commander()
+        cmd.brain._rpc_call.side_effect = [3104]
+        cmd.brain._verify_standing_after_unknown = AsyncMock(return_value=False)
+        with patch('production_commander.asyncio.sleep', new_callable=AsyncMock):
+            with patch(
+                'claudia.brain.audit_logger.get_audit_logger'
+            ) as mock_get:
+                mock_audit = MagicMock()
+                mock_get.return_value = mock_audit
+                _run(cmd._wakeup_animation())
+                mock_audit.log_entry.assert_called_once()
+                entry = mock_audit.log_entry.call_args[0][0]
+                assert entry.success is False
+                assert entry.safety_verdict == "standup_failed"
+
+    def test_audit_standup_ok_stretch_fail_is_consistent(self):
+        """StandUp 成功 + Stretch 失败 → success=False + safety_verdict='stretch_failed'
+
+        防止 success 与 safety_verdict 不一致:
+        曾出现 success=False + safety_verdict='ok' 的矛盾状态。
+        """
+        cmd = _make_commander()
+        cmd.brain._rpc_call.side_effect = [0, 3103]  # StandUp=0, Stretch=3103(失败)
+        with patch('production_commander.asyncio.sleep', new_callable=AsyncMock):
+            with patch(
+                'claudia.brain.audit_logger.get_audit_logger'
+            ) as mock_get:
+                mock_audit = MagicMock()
+                mock_get.return_value = mock_audit
+                _run(cmd._wakeup_animation())
+                mock_audit.log_entry.assert_called_once()
+                entry = mock_audit.log_entry.call_args[0][0]
+                assert entry.success is False
+                assert entry.safety_verdict == "stretch_failed"
+                assert "3103" in entry.safety_reason
 
 
 # === Action 模型预热 ===
@@ -303,3 +365,27 @@ class TestActionModelWarmup:
         assert len(warmed_models) == 2
         assert warmed_models[0] == "test-model"          # 7B 先
         assert warmed_models[1] == "test-action-model"   # Action 后（驻留显存）
+
+    def test_shadow_first_timeout_still_warms_second(self):
+        """Shadow 模式: Action 超时 → 7B 仍然预热（超时隔离）"""
+        cmd = _make_commander(router_mode="shadow")
+        warmed_models = []
+        call_idx = [0]
+
+        def mock_chat(**kwargs):
+            idx = call_idx[0]
+            call_idx[0] += 1
+            if idx == 0:
+                # Action 模型超时: 阻塞足够长触发 wait_for timeout
+                import time as _time
+                _time.sleep(999)
+            warmed_models.append(kwargs.get('model'))
+            return {'message': {'content': '{}'}}
+
+        # wait_for 的 timeout 会取消第一个任务，循环继续到第二个
+        with patch.dict('sys.modules', {'ollama': MagicMock(chat=mock_chat)}):
+            _run(cmd._warmup_model())
+
+        # 第一个超时被跳过，第二个 (7B) 应正常预热
+        assert len(warmed_models) == 1
+        assert warmed_models[0] == "test-model"  # 7B 仍然被预热

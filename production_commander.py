@@ -129,45 +129,48 @@ class ProductionCommander:
             loop = asyncio.get_event_loop()
             router_mode = self.brain._router_mode.value
 
-            # 构建预热序列: (model, num_ctx, label)
+            # 构建预热序列: (model, num_ctx, label, timeout_s)
             # 最后预热的模型驻留 VRAM，应为该模式首条命令的主路径模型
+            # Action 模型 num_predict=30 推理轻量，30s 超时足够
             warmup_sequence = []
             if router_mode == "shadow":
                 # Shadow: legacy(7B) 是主路径 → 7B 最后预热
                 action_model = self.brain._channel_router._action_model
                 warmup_sequence = [
-                    (action_model, 1024, "Action"),
-                    (model_name, 2048, "7B"),
+                    (action_model, 1024, "Action", 30),
+                    (model_name, 2048, "7B", 60),
                 ]
             elif router_mode == "dual":
                 # Dual: action channel 先执行 → Action 最后预热
                 action_model = self.brain._channel_router._action_model
                 warmup_sequence = [
-                    (model_name, 2048, "7B"),
-                    (action_model, 1024, "Action"),
+                    (model_name, 2048, "7B", 60),
+                    (action_model, 1024, "Action", 30),
                 ]
             else:
                 # Legacy: 只有 7B
                 warmup_sequence = [
-                    (model_name, 2048, "7B"),
+                    (model_name, 2048, "7B", 60),
                 ]
 
-            for model, num_ctx, label in warmup_sequence:
-                start = time.time()
-                await asyncio.wait_for(
-                    loop.run_in_executor(None, _sync_warmup, model, num_ctx),
-                    timeout=60,
-                )
-                elapsed = (time.time() - start) * 1000
-                print("✅ {} 模型就绪 ({}: {:.0f}ms)".format(
-                    label, model, elapsed))
+            for model, num_ctx, label, timeout_s in warmup_sequence:
+                try:
+                    start = time.time()
+                    await asyncio.wait_for(
+                        loop.run_in_executor(None, _sync_warmup, model, num_ctx),
+                        timeout=timeout_s,
+                    )
+                    elapsed = (time.time() - start) * 1000
+                    print("✅ {} 模型就绪 ({}: {:.0f}ms)".format(
+                        label, model, elapsed))
+                except asyncio.TimeoutError:
+                    print("⚠️ {} 模型预热超时 ({}s)，继续".format(
+                        label, timeout_s))
+                except Exception as e:
+                    print("⚠️ {} 模型预热失败: {}，继续".format(label, e))
 
         except ImportError:
             print("⚠️ ollama 库不可用，跳过预热")
-        except asyncio.TimeoutError:
-            print("⚠️ 模型预热超时，继续启动")
-        except Exception as e:
-            print("⚠️ 模型预热失败: {}，继续启动".format(e))
 
     async def _wakeup_animation(self):
         """唤醒动画 — 机器人起立+伸懒腰
@@ -241,6 +244,19 @@ class ProductionCommander:
             from claudia.brain.audit_logger import AuditEntry, get_audit_logger
             from claudia.brain.audit_routes import ROUTE_STARTUP
             elapsed = (time.time() - start_time) * 1000
+            # success, safety_verdict, safety_reason 从同一逻辑派生，避免不一致
+            stretch_ok = (stretch_code is None
+                          or stretch_code in (0, -1, 3104))
+            wakeup_success = standup_confirmed and stretch_ok
+            if not standup_confirmed:
+                verdict = "standup_failed"
+                reason = "standup_code={}".format(standup_code)
+            elif not stretch_ok:
+                verdict = "stretch_failed"
+                reason = "stretch_code={}".format(stretch_code)
+            else:
+                verdict = "ok"
+                reason = None
             entry = AuditEntry(
                 timestamp=datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
                 model_name="wakeup_animation",
@@ -251,14 +267,12 @@ class ProductionCommander:
                 llm_output=None,
                 api_code=1004,
                 sequence=[1004, 1017] if stretch_code is not None else [1004],
-                safety_verdict="ok",
-                safety_reason=None,
+                safety_verdict=verdict,
+                safety_reason=reason,
                 elapsed_ms=elapsed,
                 cache_hit=False,
                 route=ROUTE_STARTUP,
-                success=(standup_confirmed
-                         and (stretch_code is None
-                              or stretch_code in (0, -1, 3104))),
+                success=wakeup_success,
             )
             get_audit_logger().log_entry(entry)
         except Exception:
