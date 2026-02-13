@@ -433,7 +433,7 @@ def main():
     print("\n  次のステップ:")
     print("  python3 scripts/audit_baseline.py --min-n 100")
 
-    return 0 if exceptions > 0 else 0
+    return 1 if exceptions > 0 else 0
 
 
 if __name__ == "__main__":
