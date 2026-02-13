@@ -223,7 +223,7 @@ class TestWakeupAudit:
         cmd.brain._rpc_call.side_effect = [0, 0]
         with patch('production_commander.asyncio.sleep', new_callable=AsyncMock):
             with patch(
-                'src.claudia.brain.audit_logger.get_audit_logger'
+                'claudia.brain.audit_logger.get_audit_logger'
             ) as mock_get:
                 mock_audit = MagicMock()
                 mock_get.return_value = mock_audit
@@ -241,7 +241,7 @@ class TestWakeupAudit:
         cmd.brain._rpc_call.side_effect = [3103]
         with patch('production_commander.asyncio.sleep', new_callable=AsyncMock):
             with patch(
-                'src.claudia.brain.audit_logger.get_audit_logger'
+                'claudia.brain.audit_logger.get_audit_logger'
             ) as mock_get:
                 mock_audit = MagicMock()
                 mock_get.return_value = mock_audit
