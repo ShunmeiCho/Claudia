@@ -67,6 +67,7 @@ Thumbs.db
 # ROS2 Workspace (keep source, ignore build artifacts)
 # ----------------------------------------------------------------------------
 cyclonedds_ws/
+cyclonedds.xml
 
 # ----------------------------------------------------------------------------
 # Python Cache and Compiled Files
