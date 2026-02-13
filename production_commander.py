@@ -135,8 +135,10 @@ class ProductionCommander:
             print("✅ 模型就绪 ({}: {:.0f}ms)".format(model_name, elapsed))
 
             # Dual/Shadow 模式: 预热 Action 模型
-            from src.claudia.brain.channel_router import RouterMode
-            if self.brain._router_mode != RouterMode.LEGACY:
+            # 注意: 用 .value 字符串比较，避免跨模块 Enum 身份不匹配
+            # (production_brain 导入 claudia.brain.channel_router,
+            #  此处若导入 src.claudia.brain.channel_router 则为不同的 Enum 类)
+            if self.brain._router_mode.value != "legacy":
                 action_model = self.brain._channel_router._action_model
                 start = time.time()
                 await asyncio.wait_for(
