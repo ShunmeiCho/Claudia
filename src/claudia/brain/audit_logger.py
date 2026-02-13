@@ -32,6 +32,13 @@ class AuditEntry:
     route: str                  # 路由: emergency/cache/3B/7B
     success: bool               # 是否成功
 
+    # PR2 扩展字段（全部 Optional，默认 None — 旧日志反序列化兼容）
+    request_id: Optional[str] = None
+    router_mode: Optional[str] = None       # "legacy" | "dual" | "shadow"
+    shadow_comparison: Optional[Dict[str, Any]] = None
+    action_latency_ms: Optional[float] = None
+    voice_latency_ms: Optional[float] = None
+
 
 class AuditLogger:
     """审计日志管理器"""

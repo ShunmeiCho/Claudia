@@ -4,6 +4,7 @@
 Production Brain Fixed - 修复SportClient初始化和提示词问题
 """
 
+import contextvars
 import copy
 import json
 import time
@@ -17,6 +18,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from functools import lru_cache
 
+# PR2: 协程安全的 process_and_execute 上下文标记
+# contextvars 确保每个 asyncio.Task 独立计数，不会并发串扰
+_pae_depth = contextvars.ContextVar('_pae_depth', default=0)  # type: contextvars.ContextVar[int]
+
 from claudia.brain.action_registry import (
     ACTION_REGISTRY, VALID_API_CODES, EXECUTABLE_API_CODES,
     REQUIRE_STANDING, HIGH_ENERGY_ACTIONS,
@@ -24,6 +29,7 @@ from claudia.brain.action_registry import (
     get_response_for_action, get_response_for_sequence,
 )
 from claudia.brain.safety_compiler import SafetyCompiler, SafetyVerdict
+from claudia.brain.channel_router import ChannelRouter, RouterMode, RouterResult
 from claudia.brain.audit_routes import (
     ROUTE_EMERGENCY, ROUTE_HOTPATH, ROUTE_HOTPATH_REJECTED,
     ROUTE_SEQUENCE, ROUTE_DANCE, ROUTE_CONVERSATIONAL,
@@ -289,8 +295,27 @@ class ProductionBrain:
         self.last_posture_standing = False  # 初始假设坐姿
         self.last_executed_api = None       # 最后执行的API代码
 
+        # PR2: 双通道路由器（BRAIN_ROUTER_MODE 环境变量控制）
+        router_mode_str = os.getenv("BRAIN_ROUTER_MODE", "legacy")
+        try:
+            self._router_mode = RouterMode(router_mode_str)
+        except ValueError:
+            self.logger.warning(
+                "无效 BRAIN_ROUTER_MODE='{}', 降级为 legacy".format(router_mode_str))
+            self._router_mode = RouterMode.LEGACY
+        self._channel_router = ChannelRouter(self, self._router_mode)
+
+        # 非 legacy 模式: 验证 action model 存在
+        if self._router_mode != RouterMode.LEGACY:
+            if not self._verify_action_model():
+                self.logger.warning(
+                    "Action 模型不可用, 降级 BRAIN_ROUTER_MODE → legacy")
+                self._router_mode = RouterMode.LEGACY
+                self._channel_router = ChannelRouter(self, self._router_mode)
+
         self.logger.info("🧠 生产大脑初始化完成")
         self.logger.info(f"   硬件模式: {'真实' if use_real_hardware else '模拟'}")
+        self.logger.info(f"   路由模式: {self._router_mode.value}")
     
     def _setup_logger(self) -> logging.Logger:
         """设置日志"""
@@ -608,25 +633,37 @@ class ProductionBrain:
 
     async def process_and_execute(self, command):
         # type: (str) -> BrainOutput
-        """原子化命令处理+执行入口（PR1 引入框架，PR2 迁移调用方）
+        """原子化命令处理+执行入口（PR1 引入框架，PR2 强制所有入口使用）
 
         紧急指令绕过锁直接执行，普通指令在锁内串行处理。
+        execution_status 语义:
+          - "success": 动作执行成功
+          - "unknown": RPC 超时（机器人可能仍在执行）
+          - "failed": 动作执行失败
+          - "skipped": 纯文本回复，无动作执行
         """
-        cmd_lower = command.strip().lower()
-        if cmd_lower in self.EMERGENCY_COMMANDS:
-            return await self._handle_emergency(command)
+        # contextvars 标记: 协程安全，不会并发串扰
+        token = _pae_depth.set(_pae_depth.get(0) + 1)
+        try:
+            cmd_lower = command.strip().lower()
+            if cmd_lower in self.EMERGENCY_COMMANDS:
+                return await self._handle_emergency(command)
 
-        async with self._command_lock:
-            brain_output = await self.process_command(command)
-            if brain_output.api_code or brain_output.sequence:
-                result = await self.execute_action(brain_output)
-                if result is True:
-                    brain_output.execution_status = "success"
-                elif result == "unknown":
-                    brain_output.execution_status = "unknown"
+            async with self._command_lock:
+                brain_output = await self.process_command(command)
+                if brain_output.api_code or brain_output.sequence:
+                    result = await self.execute_action(brain_output)
+                    if result is True:
+                        brain_output.execution_status = "success"
+                    elif result == "unknown":
+                        brain_output.execution_status = "unknown"
+                    else:
+                        brain_output.execution_status = "failed"
                 else:
-                    brain_output.execution_status = "failed"
-            return brain_output
+                    brain_output.execution_status = "skipped"
+                return brain_output
+        finally:
+            _pae_depth.reset(token)
 
     async def _handle_emergency(self, command):
         # type: (str) -> BrainOutput
@@ -695,7 +732,7 @@ class ProductionBrain:
                 self.logger.error(f"模型不存在: {model}")
                 # 尝试创建模型（v12.2统一使用7B modelfile）
                 if "v12" in model:
-                    create_cmd = f"ollama create {model} -f models/ClaudiaIntelligent_7B_v2.0.modelfile"
+                    create_cmd = f"ollama create {model} -f models/ClaudiaIntelligent_7B_v2.0"
                     subprocess.run(create_cmd, shell=True, capture_output=True)
                     self.logger.info(f"创建模型: {model}")
                 else:
@@ -934,33 +971,50 @@ class ProductionBrain:
         # 默认对话回复
         return "はい、何でしょうか？"
 
-    async def _call_ollama_v2(self, model: str, command: str, timeout: int = 10) -> Optional[Dict]:
-        """
-        调用Ollama LLM推理
-        - 使用Python ollama库
-        - loop.run_in_executor避免阻塞事件循环
-        - 结构化JSON输出
+    def _verify_action_model(self):
+        # type: () -> bool
+        """验证 Action 模型是否可用（启动时一次性检查）"""
+        if not OLLAMA_AVAILABLE:
+            return False
+        try:
+            ollama.show(self._channel_router._action_model)
+            self.logger.info("Action 模型已验证: {}".format(
+                self._channel_router._action_model))
+            return True
+        except Exception as e:
+            self.logger.warning("Action 模型不可用: {}".format(e))
+            return False
+
+    async def _call_ollama_v2(self, model, command, timeout=10,
+                              num_predict=100, num_ctx=2048):
+        # type: (str, str, int, int, int) -> Optional[Dict]
+        """调用 Ollama LLM 推理
+
+        Args:
+            model: Ollama 模型名
+            command: 用户输入
+            timeout: 异步超时秒数
+            num_predict: 最大生成 token 数（Action 通道传 30，Legacy 默认 100）
+            num_ctx: 上下文窗口大小（Action 通道传 1024，Legacy 默认 2048）
         """
         if not OLLAMA_AVAILABLE:
             self.logger.warning("ollama库不可用，使用旧方法")
             return self._call_ollama(model, command, timeout)
 
-        try:
-            # P0-7: 移除每次推理时的 ollama.show() 开销
-            # 模型存在性在启动时一次性验证（_call_ollama 降级路径保留 show）
-            def _sync_ollama_call():
-                # 生成参数优化（统一7B配置）
-                num_predict = 100
-                num_ctx = 2048
+        # 闭包捕获: 将参数绑定到局部变量供 _sync_ollama_call 使用
+        _num_predict = num_predict
+        _num_ctx = num_ctx
 
+        try:
+            def _sync_ollama_call():
                 response = ollama.chat(
                     model=model,
                     messages=[{'role': 'user', 'content': command}],
-                    format='json',  # 强制JSON输出
+                    format='json',
                     options={
-                        'temperature': 0.0,  # 改为0.0确保确定性输出
-                        'num_predict': num_predict,
-                        'num_ctx': num_ctx,
+                        'temperature': 0.0,
+                        'num_predict': _num_predict,
+                        'num_ctx': _num_ctx,
                         'top_p': 0.9,
                     }
                 )
@@ -986,12 +1040,109 @@ class ProductionBrain:
             self.logger.error(f"Ollama调用错误: {e}")
             return None
 
+    def _apply_safety_to_router_result(self, command, router_result,
+                                        state_snapshot, snapshot_monotonic_ts,
+                                        start_time):
+        # type: (str, RouterResult, Any, Optional[float], float) -> BrainOutput
+        """RouterResult → SafetyCompiler → BrainOutput（Invariant 1: 安全编译不跳过）
+
+        Dual/Shadow 路径专用。Legacy 路径不经过此方法。
+        """
+        api_code = router_result.api_code
+        sequence = router_result.sequence
+        response = router_result.response
+        route = router_result.route
+        raw_llm_output = router_result.raw_llm_output
+
+        # 保存原始决策（Shadow 对比用）
+        raw_decision = None
+        if sequence:
+            raw_decision = list(sequence)
+        elif api_code is not None:
+            raw_decision = [api_code]
+
+        # 构建候选动作列表
+        candidate = sequence if sequence else ([api_code] if api_code else [])
+
+        if candidate:
+            _batt = state_snapshot.battery_level if state_snapshot else 0.0
+            _stand = state_snapshot.is_standing if state_snapshot else False
+            _ts = snapshot_monotonic_ts if state_snapshot else None
+            if not state_snapshot:
+                self.logger.warning("状態監視なし: fail-safe安全コンパイル (battery=0.0)")
+            verdict = self.safety_compiler.compile(
+                candidate, _batt, _stand, snapshot_timestamp=_ts,
+            )
+            if verdict.is_blocked:
+                self.logger.warning("路由器路径安全拒绝: {}".format(verdict.block_reason))
+                elapsed = (time.time() - start_time) * 1000
+                rejected_output = BrainOutput(
+                    response=verdict.response_override or "安全のため動作を停止しました",
+                    api_code=None, confidence=1.0,
+                    reasoning="router_safety_rejected",
+                    raw_decision=raw_decision,
+                )
+                self._log_audit(
+                    command, rejected_output, route=route,
+                    elapsed_ms=elapsed, cache_hit=False,
+                    model_used=self._router_mode.value,
+                    current_state=state_snapshot,
+                    llm_output=raw_llm_output,
+                    safety_verdict="rejected:{}".format(verdict.block_reason),
+                    request_id=router_result.request_id,
+                    router_mode=self._router_mode.value,
+                    shadow_comparison=router_result.shadow_comparison,
+                    action_latency_ms=router_result.action_latency_ms,
+                    voice_latency_ms=router_result.voice_latency_ms,
+                )
+                return rejected_output
+
+            exec_seq = verdict.executable_sequence
+            if len(exec_seq) == 1:
+                final_api = exec_seq[0]
+                final_sequence = None
+            else:
+                final_api = None
+                final_sequence = exec_seq
+
+            if verdict.warnings:
+                for w in verdict.warnings:
+                    self.logger.info("SafetyCompiler: {}".format(w))
+        else:
+            final_api = api_code
+            final_sequence = sequence
+
+        elapsed = (time.time() - start_time) * 1000
+        output = BrainOutput(
+            response=response,
+            api_code=final_api,
+            sequence=final_sequence,
+            raw_decision=raw_decision,
+        )
+        self._log_audit(
+            command, output, route=route,
+            elapsed_ms=elapsed, cache_hit=False,
+            model_used=self._router_mode.value,
+            current_state=state_snapshot,
+            llm_output=raw_llm_output,
+            safety_verdict="ok",
+            request_id=router_result.request_id,
+            router_mode=self._router_mode.value,
+            shadow_comparison=router_result.shadow_comparison,
+            action_latency_ms=router_result.action_latency_ms,
+            voice_latency_ms=router_result.voice_latency_ms,
+        )
+        return output
+
     def _log_audit(self, command, output, route,
                    elapsed_ms, cache_hit, model_used,
                    current_state,
                    llm_output, safety_verdict,
-                   safety_reason=None):
-        # type: (str, BrainOutput, str, float, bool, str, Optional[Any], Optional[str], str, Optional[str]) -> None
+                   safety_reason=None,
+                   request_id=None, router_mode=None,
+                   shadow_comparison=None,
+                   action_latency_ms=None, voice_latency_ms=None):
+        # type: (str, BrainOutput, str, float, bool, str, Optional[Any], Optional[str], str, Optional[str], Optional[str], Optional[str], Optional[Dict], Optional[float], Optional[float]) -> None
         """记录完整审计日志（route 必须使用 audit_routes.py 常量）"""
         assert route in ALL_ROUTES, (
             "非法 route='{}'，必须使用 audit_routes.py 中的常量。"
@@ -1021,7 +1172,15 @@ class ProductionBrain:
                 elapsed_ms=elapsed_ms,
                 cache_hit=cache_hit,
                 route=route,
-                success=output.api_code is not None or output.sequence is not None
+                # success = 流水线正常完成（含对话/安全拒绝），不是"是否有动作"
+                # 用 safety_verdict 和 api_code/sequence 做细粒度分析
+                success=not safety_verdict.startswith("error"),
+                # PR2 扩展字段
+                request_id=request_id,
+                router_mode=router_mode,
+                shadow_comparison=shadow_comparison,
+                action_latency_ms=action_latency_ms,
+                voice_latency_ms=voice_latency_ms,
             )
             self.audit_logger.log_entry(entry)
         except Exception as e:
@@ -1029,6 +1188,11 @@ class ProductionBrain:
 
     async def process_command(self, command: str) -> BrainOutput:
         """处理用户指令（状态快照+热路径+安全门优化版）"""
+        if _pae_depth.get(0) == 0:
+            self.logger.warning(
+                "process_command() called outside process_and_execute() "
+                "— 请迁移至 process_and_execute() 原子入口"
+            )
         start_time = time.time()
         self.logger.info(f"📥 接收指令: '{command}'")
 
@@ -1362,102 +1526,107 @@ class ProductionBrain:
             )
             return dance_output
 
-        # 2. 统一使用7B模型推理 → SafetyCompiler 统一安全编译
-        self.logger.info("使用7B模型推理...")
-        result = await self._call_ollama_v2(
-            self.model_7b,
-            command,
-            timeout=25,
-        )
+        # 2. LLM 推理 → SafetyCompiler 统一安全编译
+        # PR2: 根据 BRAIN_ROUTER_MODE 分派到不同通道
+        if self._router_mode == RouterMode.LEGACY:
+            # --- Legacy 直通路径（零行为变更）---
+            self.logger.info("使用7B模型推理...")
+            result = await self._call_ollama_v2(
+                self.model_7b,
+                command,
+                timeout=25,
+            )
 
-        if result:
-            elapsed = (time.time() - start_time) * 1000
-            self.logger.info("7B模型响应 ({:.0f}ms)".format(elapsed))
+            if result:
+                elapsed = (time.time() - start_time) * 1000
+                self.logger.info("7B模型响应 ({:.0f}ms)".format(elapsed))
 
-            # 提取字段 (支持完整字段名和缩写字段名)
-            raw_response = result.get("response") or result.get("r", "実行します")
-            response = self._sanitize_response(raw_response)
-            api_code = result.get("api_code") or result.get("a")
-            sequence = result.get("sequence") or result.get("s")
+                raw_response = result.get("response") or result.get("r", "実行します")
+                response = self._sanitize_response(raw_response)
+                api_code = result.get("api_code") or result.get("a")
+                sequence = result.get("sequence") or result.get("s")
 
-            # 解析层白名单过滤（VALID_API_CODES: 无参数 + 已启用）
-            # 非法 api_code 视为纯对话（不进 SafetyCompiler 以免误阻）
-            if api_code is not None and api_code not in VALID_API_CODES:
-                self.logger.warning("LLM 输出非法 api_code={}，降级为纯文本".format(api_code))
-                api_code = None
-            if sequence:
-                valid_seq = [c for c in sequence if c in VALID_API_CODES]
-                if len(valid_seq) != len(sequence):
-                    dropped = [c for c in sequence if c not in VALID_API_CODES]
-                    self.logger.warning("LLM 序列含非法码 {}，过滤后: {}".format(dropped, valid_seq))
-                    sequence = valid_seq if valid_seq else None
+                if api_code is not None and api_code not in VALID_API_CODES:
+                    self.logger.warning("LLM 输出非法 api_code={}，降级为纯文本".format(api_code))
+                    api_code = None
+                if sequence:
+                    valid_seq = [c for c in sequence if c in VALID_API_CODES]
+                    if len(valid_seq) != len(sequence):
+                        dropped = [c for c in sequence if c not in VALID_API_CODES]
+                        self.logger.warning("LLM 序列含非法码 {}，过滤后: {}".format(dropped, valid_seq))
+                        sequence = valid_seq if valid_seq else None
 
-            # 构建候选动作列表
-            candidate = sequence if sequence else ([api_code] if api_code else [])
+                candidate = sequence if sequence else ([api_code] if api_code else [])
 
-            if candidate:
-                # fail-closed: state_snapshot=None → battery=0.0, is_standing=False
-                _batt = state_snapshot.battery_level if state_snapshot else 0.0
-                _stand = state_snapshot.is_standing if state_snapshot else False
-                _ts = snapshot_monotonic_ts if state_snapshot else None
-                if not state_snapshot:
-                    self.logger.warning("状態監視なし: fail-safe安全コンパイル (battery=0.0)")
-                verdict = self.safety_compiler.compile(
-                    candidate, _batt, _stand, snapshot_timestamp=_ts,
-                )
-                if verdict.is_blocked:
-                    self.logger.warning("LLM 路径安全拒绝: {}".format(verdict.block_reason))
-                    rejected_output = BrainOutput(
-                        response=verdict.response_override or "安全のため動作を停止しました",
-                        api_code=None, confidence=1.0,
-                        reasoning="llm_safety_rejected",
+                if candidate:
+                    _batt = state_snapshot.battery_level if state_snapshot else 0.0
+                    _stand = state_snapshot.is_standing if state_snapshot else False
+                    _ts = snapshot_monotonic_ts if state_snapshot else None
+                    if not state_snapshot:
+                        self.logger.warning("状態監視なし: fail-safe安全コンパイル (battery=0.0)")
+                    verdict = self.safety_compiler.compile(
+                        candidate, _batt, _stand, snapshot_timestamp=_ts,
                     )
-                    self._log_audit(
-                        command, rejected_output, route=ROUTE_LLM_7B,
-                        elapsed_ms=elapsed, cache_hit=False, model_used="7B",
-                        current_state=state_snapshot,
-                        llm_output=str(result)[:200],
-                        safety_verdict="rejected:{}".format(verdict.block_reason),
-                    )
-                    return rejected_output
+                    if verdict.is_blocked:
+                        self.logger.warning("LLM 路径安全拒绝: {}".format(verdict.block_reason))
+                        rejected_output = BrainOutput(
+                            response=verdict.response_override or "安全のため動作を停止しました",
+                            api_code=None, confidence=1.0,
+                            reasoning="llm_safety_rejected",
+                        )
+                        self._log_audit(
+                            command, rejected_output, route=ROUTE_LLM_7B,
+                            elapsed_ms=elapsed, cache_hit=False, model_used="7B",
+                            current_state=state_snapshot,
+                            llm_output=str(result)[:200],
+                            safety_verdict="rejected:{}".format(verdict.block_reason),
+                        )
+                        return rejected_output
 
-                exec_seq = verdict.executable_sequence
-                if len(exec_seq) == 1:
-                    final_api = exec_seq[0]
-                    final_sequence = None
+                    exec_seq = verdict.executable_sequence
+                    if len(exec_seq) == 1:
+                        final_api = exec_seq[0]
+                        final_sequence = None
+                    else:
+                        final_api = None
+                        final_sequence = exec_seq
+
+                    if verdict.warnings:
+                        for w in verdict.warnings:
+                            self.logger.info("SafetyCompiler: {}".format(w))
                 else:
-                    final_api = None
-                    final_sequence = exec_seq
+                    final_api = api_code
+                    final_sequence = sequence
 
-                # 降级时替换响应
-                if verdict.warnings:
-                    for w in verdict.warnings:
-                        self.logger.info("SafetyCompiler: {}".format(w))
-            else:
-                final_api = api_code
-                final_sequence = sequence
+                llm_output = BrainOutput(
+                    response=response,
+                    api_code=final_api,
+                    sequence=final_sequence,
+                )
+                self._log_audit(
+                    command, llm_output, route=ROUTE_LLM_7B,
+                    elapsed_ms=elapsed, cache_hit=False, model_used="7B",
+                    current_state=state_snapshot,
+                    llm_output=str(result)[:200],
+                    safety_verdict="ok",
+                )
+                return llm_output
 
-            llm_output = BrainOutput(
-                response=response,
-                api_code=final_api,
-                sequence=final_sequence,
+            # Legacy 无响应降级
+            elapsed = (time.time() - start_time) * 1000
+            self.logger.warning("模型无响应，使用默认 ({:.0f}ms)".format(elapsed))
+            return BrainOutput(
+                response="すみません、理解できませんでした",
+                api_code=None,
             )
-            self._log_audit(
-                command, llm_output, route=ROUTE_LLM_7B,
-                elapsed_ms=elapsed, cache_hit=False, model_used="7B",
-                current_state=state_snapshot,
-                llm_output=str(result)[:200],
-                safety_verdict="ok",
-            )
-            return llm_output
 
-        # 4. 降级处理
-        elapsed = (time.time() - start_time) * 1000
-        self.logger.warning("模型无响应，使用默认 ({:.0f}ms)".format(elapsed))
-        return BrainOutput(
-            response="すみません、理解できませんでした",
-            api_code=None,
-        )
+        # --- Dual/Shadow 路由器路径 ---
+        self.logger.info("路由器推理 (mode={})...".format(self._router_mode.value))
+        router_result = await self._channel_router.route(
+            command, state_snapshot=state_snapshot, start_time=start_time)
+        return self._apply_safety_to_router_result(
+            command, router_result, state_snapshot,
+            snapshot_monotonic_ts, start_time)
     
     async def execute_action(self, brain_output: BrainOutput) -> Union[bool, str]:
         """执行动作
@@ -1467,6 +1636,11 @@ class ProductionBrain:
             "unknown" — 超时但机器人可达（动作可能仍在执行）
             False — 失败
         """
+        if _pae_depth.get(0) == 0:
+            self.logger.warning(
+                "execute_action() called outside process_and_execute() "
+                "— 请迁移至 process_and_execute() 原子入口"
+            )
         # 检查硬件模式和SportClient状态
         if self.use_real_hardware and self.sport_client:
             self.logger.info("🤖 使用真实硬件执行")

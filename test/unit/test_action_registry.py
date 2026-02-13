@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 from claudia.brain.action_registry import (
     _ACTIONS, ACTION_REGISTRY,
     VALID_API_CODES, EXECUTABLE_API_CODES, SAFE_DEFAULT_PARAMS,
-    REQUIRE_STANDING, HIGH_ENERGY_ACTIONS,
+    REQUIRE_STANDING, HIGH_ENERGY_ACTIONS, ACTION_MODEL_API_CODES,
     METHOD_MAP, ACTION_RESPONSES,
     get_response_for_action, get_response_for_sequence,
     generate_modelfile_action_block,
@@ -188,3 +188,73 @@ class TestRegistryIntegrity:
                 assert a.api_code not in VALID_API_CODES
                 assert a.api_code not in EXECUTABLE_API_CODES
                 assert a.api_code not in METHOD_MAP
+
+
+class TestActionModelApiCodes:
+    """PR2: ACTION_MODEL_API_CODES 一致性"""
+
+    def test_subset_of_valid(self):
+        """ACTION_MODEL_API_CODES 是 VALID_API_CODES 的子集"""
+        assert ACTION_MODEL_API_CODES <= VALID_API_CODES
+
+    def test_no_high_risk(self):
+        """ACTION_MODEL_API_CODES 不含高风险动作"""
+        overlap = ACTION_MODEL_API_CODES & HIGH_ENERGY_ACTIONS
+        assert not overlap, (
+            "ACTION_MODEL_API_CODES 不应包含高风险动作: {}".format(overlap))
+
+    def test_excludes_exactly_high_risk(self):
+        """VALID - ACTION_MODEL = 仅高风险动作"""
+        diff = VALID_API_CODES - ACTION_MODEL_API_CODES
+        expected_high = frozenset(
+            a.api_code for a in _ACTIONS
+            if a.enabled and not a.has_params and a.risk_level == "high"
+        )
+        assert diff == expected_high, (
+            "VALID - ACTION_MODEL 应恰好等于高风险动作集合，"
+            "差异: {}".format(diff ^ expected_high))
+
+    def test_generate_no_high_risk(self):
+        """generate_modelfile_action_block(include_high_risk=False) 不含高风险码"""
+        block = generate_modelfile_action_block(include_high_risk=False)
+        for code in HIGH_ENERGY_ACTIONS:
+            # 确保高风险码不作为独立条目出现
+            # 注意: 1030 不应出现为 "1030=" 的形式
+            assert "{}=".format(code) not in block, (
+                "高风险动作 {} 不应出现在 Action 模型列表中".format(code))
+
+    def test_generate_includes_safe_actions(self):
+        """generate_modelfile_action_block(include_high_risk=False) 包含安全动作"""
+        block = generate_modelfile_action_block(include_high_risk=False)
+        for code in ACTION_MODEL_API_CODES:
+            assert str(code) in block, (
+                "安全动作 {} 未出现在 Action 模型列表中".format(code))
+
+    def test_modelfile_action_list_consistent(self):
+        """ClaudiaAction modelfile 动作列表与 ACTION_MODEL_API_CODES 一致"""
+        import re
+        modelfile_path = os.path.join(
+            os.path.dirname(__file__), '..', '..', 'models',
+            'ClaudiaAction_v1.0')
+        with open(modelfile_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # 只在 SYSTEM 区域内匹配 "NNNN=" 格式的动作定义
+        # 避免误匹配 PARAMETER 值（如 num_ctx=1024）
+        codes_in_file = set()
+        for match in re.finditer(r'(\d{4})=', content):
+            code = int(match.group(1))
+            if 1000 <= code <= 1099:
+                codes_in_file.add(code)
+
+        # modelfile 中的码应是 ACTION_MODEL_API_CODES 的子集
+        unexpected = codes_in_file - ACTION_MODEL_API_CODES
+        assert not unexpected, (
+            "Modelfile 包含不在 ACTION_MODEL_API_CODES 中的码: {}。"
+            "如果这些是高风险动作，请从 modelfile 中移除。".format(unexpected))
+
+        # ACTION_MODEL_API_CODES 中的码应出现在 modelfile 中
+        missing = ACTION_MODEL_API_CODES - codes_in_file
+        assert not missing, (
+            "ACTION_MODEL_API_CODES 中的码 {} 未出现在 modelfile 中。"
+            "请更新 modelfile 或 registry。".format(missing))

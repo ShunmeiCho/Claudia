@@ -152,38 +152,35 @@ class ProductionCommander:
             else:
                 print(f"❌ 未知命令: {command}")
         else:
-            # 用户指令
+            # 用户指令 — 使用原子入口 process_and_execute（PR2 迁移）
             print(f"\n🎯 处理指令: '{command}'")
             print("-"*40)
-            
-            # 调用大脑处理
+
             start_time = time.time()
-            brain_output = await self.brain.process_command(command)
+            brain_output = await self.brain.process_and_execute(command)
             process_time = (time.time() - start_time) * 1000
-            
+
             # 显示结果
             print(f"💬 回复: {brain_output.response}")
-            
+
             if brain_output.api_code:
                 print(f"🔧 API: {brain_output.api_code}")
-            
+
             if brain_output.sequence:
                 print(f"📋 序列: {brain_output.sequence}")
-            
+
             print(f"⏱️ 处理时间: {process_time:.0f}ms")
-            
-            # 执行动作
+
+            # 执行状态（process_and_execute 内已完成执行）
             if brain_output.api_code or brain_output.sequence:
                 print("-"*40)
-                print("🚀 执行动作...")
-                result = await self.brain.execute_action(brain_output)
-                if result is True:
+                if brain_output.execution_status == "success":
                     print("✅ 执行成功")
-                elif result == "unknown":
+                elif brain_output.execution_status == "unknown":
                     print("⚠️ 动作超时（机器人可达，可能仍在执行）")
-                else:
+                elif brain_output.execution_status == "failed":
                     print("❌ 执行失败")
-            
+
             # 记录历史
             timestamp = datetime.now().strftime("%H:%M:%S")
             self.command_history.append((
@@ -191,7 +188,7 @@ class ProductionCommander:
                 command,
                 brain_output.response
             ))
-            
+
             print("-"*40 + "\n")
     
     async def run(self):
