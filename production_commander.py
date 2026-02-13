@@ -16,7 +16,7 @@ from typing import Optional
 sys.path.append('/home/m1ng/claudia')
 sys.path.append('/home/m1ng/claudia/src')
 
-from src.claudia.brain.production_brain import ProductionBrain, BrainOutput
+from claudia.brain.production_brain import ProductionBrain, BrainOutput
 
 
 class ProductionCommander:
@@ -217,7 +217,8 @@ class ProductionCommander:
     def _log_wakeup_audit(self, standup_code, stretch_code, start_time):
         """记录唤醒动画的审计条目"""
         try:
-            from src.claudia.brain.audit_logger import AuditEntry, get_audit_logger
+            from claudia.brain.audit_logger import AuditEntry, get_audit_logger
+            from claudia.brain.audit_routes import ROUTE_STARTUP
             elapsed = (time.time() - start_time) * 1000
             entry = AuditEntry(
                 timestamp=datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
@@ -233,7 +234,7 @@ class ProductionCommander:
                 safety_reason=None,
                 elapsed_ms=elapsed,
                 cache_hit=False,
-                route="startup",
+                route=ROUTE_STARTUP,
                 success=(standup_code in (0, -1)
                          and (stretch_code is None
                               or stretch_code in (0, -1, 3104))),

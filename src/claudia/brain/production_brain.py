@@ -529,7 +529,7 @@ class ProductionBrain:
     def _init_mock_client(self):
         """初始化模拟客户端"""
         try:
-            from src.claudia.brain.mock_sport_client import MockSportClient
+            from claudia.brain.mock_sport_client import MockSportClient
             self.sport_client = MockSportClient()
             self.sport_client.Init()
             self.logger.info("🎭 MockSportClient初始化成功（模拟模式）")

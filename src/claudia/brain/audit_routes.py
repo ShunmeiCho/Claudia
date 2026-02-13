@@ -22,6 +22,7 @@ ROUTE_ACTION_CHANNEL = "action_channel"            # 双通道 action channel �
 ROUTE_VOICE_CHANNEL = "voice_channel"              # 双通道 voice channel（纯文本）
 ROUTE_SHADOW = "shadow"                            # Shadow 模式记录
 ROUTE_ACTION_FALLBACK = "action_fallback"          # Action channel 失败回退 legacy
+ROUTE_STARTUP = "startup"                          # 唤醒动画（Commander 起動時）
 
 # === 所有合法 route 值（Go/No-Go 统计脚本用）===
 ALL_ROUTES = frozenset([
@@ -30,4 +31,5 @@ ALL_ROUTES = frozenset([
     ROUTE_PRECHECK_REJECTED, ROUTE_LLM_7B,
     ROUTE_ACTION_CHANNEL, ROUTE_VOICE_CHANNEL,
     ROUTE_SHADOW, ROUTE_ACTION_FALLBACK,
+    ROUTE_STARTUP,
 ])
