@@ -337,7 +337,11 @@ class TestShadowRoute:
             loop.close()
 
     def test_shadow_timeout_recorded(self):
-        """Shadow: wait_for 超时 → dual_status='timeout'（Invariant 4）"""
+        """Shadow: _action_channel_shadow 超时 → dual_status='timeout'（Invariant 4）
+
+        单 GPU 顺序设计: _action_channel_shadow 包装了 action 通道调用，
+        超时时返回 _action_status="timeout" 的 RouterResult。
+        """
         brain = _make_brain()
         router = ChannelRouter(brain, RouterMode.SHADOW)
 
@@ -353,28 +357,13 @@ class TestShadowRoute:
 
         loop = asyncio.new_event_loop()
         try:
-            # 用较短超时测试（monkey-patch _build_shadow_comparison 的超时）
-            original = router._build_shadow_comparison
+            # monkey-patch _action_channel_shadow 使用短超时（避免等待 10s）
+            original = router._action_channel_shadow
 
-            async def fast_shadow(legacy_result, dual_task):
-                try:
-                    dual_result = await asyncio.wait_for(
-                        asyncio.shield(dual_task), timeout=0.1)
-                    return {"dual_status": "ok", "raw_agreement": True}
-                except asyncio.TimeoutError:
-                    if not dual_task.done():
-                        dual_task.cancel()
-                    return {
-                        "legacy_api_code": legacy_result.api_code,
-                        "dual_api_code": None,
-                        "dual_sequence": None,
-                        "dual_status": "timeout",
-                        "raw_agreement": False,
-                        "high_risk_divergence": False,
-                        "legacy_ms": 0, "dual_ms": 100,
-                    }
+            async def fast_action_shadow(command, request_id, timeout=20):
+                return await original(command, request_id, timeout=0.1)
 
-            router._build_shadow_comparison = fast_shadow
+            router._action_channel_shadow = fast_action_shadow
             result = loop.run_until_complete(router.route("test"))
             sc = result.shadow_comparison
             assert sc["dual_status"] == "timeout"

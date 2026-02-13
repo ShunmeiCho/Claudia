@@ -10,7 +10,7 @@ ChannelRouter — 双通道 LLM 决策路由器（PR2-B）
 三种模式:
   - LEGACY: 完全透传现有 7B LLM 路径（零行为变更）
   - DUAL:   Action 通道优先，a=null 时回退 Voice 通道
-  - SHADOW: Legacy 为主，Dual 并行观测 + 日志对比
+  - SHADOW: Legacy 为主，Action 顺序观测 + 日志对比（单 GPU 优化）
 """
 
 import os
@@ -116,17 +116,18 @@ class ChannelRouter:
 
     async def _legacy_route(self, command, request_id,
                             state_snapshot=None, start_time=None,
-                            route=ROUTE_LLM_7B):
-        # type: (str, str, Any, Optional[float], str) -> RouterResult
+                            route=ROUTE_LLM_7B, ollama_timeout=25):
+        # type: (str, str, Any, Optional[float], str, int) -> RouterResult
         """Legacy 模式: 调用现有 7B 模型，返回 RouterResult
 
         透传: 行为与 PR1 完全一致，只是包装为 RouterResult。
+        ollama_timeout: Ollama 调用超时（Legacy/Dual=25s，Shadow=45s 含 VRAM 换入）
         """
         t0 = time.monotonic()
         result = await self._brain._call_ollama_v2(
             self._brain.model_7b,
             command,
-            timeout=25,
+            timeout=ollama_timeout,
         )
         latency = (time.monotonic() - t0) * 1000
 
@@ -182,18 +183,20 @@ class ChannelRouter:
         action_result.response = self._generate_template_response(action_result)
         return action_result
 
-    async def _action_channel(self, command, request_id, allow_fallback=True):
-        # type: (str, str, bool) -> RouterResult
+    async def _action_channel(self, command, request_id,
+                              allow_fallback=True, ollama_timeout=5):
+        # type: (str, str, bool, int) -> RouterResult
         """Action 通道: 调用 action model，只输出 {a:N} 或 {s:[...]} 或 {a:null}
 
         Fix #4: 校验 api_code 和 sequence 合法性
         allow_fallback: True=失败时回退 legacy（Dual 模式），False=直接返回失败结果（Shadow 观测用）
+        ollama_timeout: Ollama 调用超时（Dual=5s 紧凑，Shadow=15s 含 VRAM 换入）
         """
         t0 = time.monotonic()
         raw = await self._brain._call_ollama_v2(
             model=self._action_model,
             command=command,
-            timeout=5,          # 动作通道紧凑超时
+            timeout=ollama_timeout,
             num_predict=30,     # ~30 tokens 足够输出 {"a":1009}
             num_ctx=1024,       # 缩小上下文窗口，降低推理开销
         )
@@ -320,130 +323,132 @@ class ChannelRouter:
         return ""
 
     # ------------------------------------------------------------------
-    # Shadow: Legacy 为主，Dual 并行观测
+    # Shadow: Legacy 为主，Action 顺序观测
     # ------------------------------------------------------------------
 
     async def _shadow_route(self, command, request_id,
                             state_snapshot=None, start_time=None):
         # type: (str, str, Any, Optional[float]) -> RouterResult
-        """Shadow 模式: Legacy 为主（返回给用户），Dual 并行观测 + 对比日志
+        """Shadow 模式: Legacy 为主（返回给用户），Action 通道顺序观测 + 对比日志
 
-        Invariant 4: request_id 全链路追踪，dual 任务 5s 超时，
-        超时/错误显式记录（不静默丢弃）
+        单 GPU 设计: Ollama 无法并行处理不同模型（8GB VRAM 只容纳一个 4.7GB 模型）。
+        并行 ensure_future 会被 Ollama 串行处理，但超时从请求提交时计算，
+        导致排在后面的请求必然超时。因此改为顺序执行:
 
+        1. Action 通道先跑（观测用，VRAM 换入 action 模型）
+        2. Legacy 7B 后跑（主路径，VRAM 换入 7B — 留在 VRAM 为下条命令准备）
+
+        Invariant 4: request_id 全链路追踪，action 超时/错误显式记录
         Fix #2: 统一返回 RouterResult（shadow_comparison 为 Optional 字段）
         Fix #3: 对比 api_code + sequence，检测 high_risk_divergence
         """
-        # 主路径: Legacy（胜出，返回给调用方）
-        legacy_task = asyncio.ensure_future(
-            self._legacy_route(command, request_id,
-                               state_snapshot=state_snapshot,
-                               start_time=start_time))
-        # 观测路径: Action 通道（有限超时，不回退 legacy — 保持对照纯净性）
-        dual_task = asyncio.ensure_future(
-            self._action_channel(command, request_id, allow_fallback=False))
+        # Step 1: Action 通道观测（allow_fallback=False 保持对照纯净性）
+        # Jetson 8GB 统一内存: 模型切换 ~15-25s（Ollama 内部 30s + 外层 45s 兜底）
+        dual_result = await self._action_channel_shadow(
+            command, request_id, timeout=45)
 
-        # 等待 legacy（主路径）
-        legacy_result = await legacy_task
+        # Step 2: Legacy 7B 主路径（7B 模型留在 VRAM，为下条命令优化）
+        # VRAM 换入 ~15-25s + 推理 ~5-10s → ollama_timeout=45s
+        legacy_result = await self._legacy_route(
+            command, request_id,
+            state_snapshot=state_snapshot,
+            start_time=start_time,
+            ollama_timeout=45)
 
-        # 等待 dual（观测路径，带超时 — Invariant 4）
-        shadow = self._build_shadow_comparison(
-            legacy_result, dual_task)
-        shadow = await shadow
-
+        # Step 3: 构建对比
+        shadow = self._build_shadow_comparison(legacy_result, dual_result)
         legacy_result.route = ROUTE_SHADOW
         legacy_result.shadow_comparison = shadow
         return legacy_result
 
-    async def _build_shadow_comparison(self, legacy_result, dual_task):
-        # type: (RouterResult, asyncio.Task) -> Dict[str, Any]
-        """构建 shadow 对比数据
+    async def _action_channel_shadow(self, command, request_id, timeout=20):
+        # type: (str, str, int) -> RouterResult
+        """Shadow 专用 action 通道: 捕获超时/异常，返回带状态的 RouterResult
 
-        dual_status 语义（Finding #2/#3 修复，不再靠 dual_api_code 编码失败状态）:
+        超时放宽: Ollama 内部 30s（Jetson VRAM 换入 ~15-25s + 推理 ~3-5s），
+        外层 45s（兜底）。
+        """
+        try:
+            result = await asyncio.wait_for(
+                self._action_channel(
+                    command, request_id,
+                    allow_fallback=False, ollama_timeout=30),
+                timeout=timeout,
+            )
+            return result
+        except asyncio.TimeoutError:
+            self._logger.warning(
+                "Shadow action 通道超时 (>{}s), request_id={}".format(
+                    timeout, request_id))
+            return RouterResult(
+                api_code=None, sequence=None,
+                response="",
+                route=ROUTE_ACTION_CHANNEL,
+                action_latency_ms=timeout * 1000,
+                request_id=request_id,
+                _action_status="timeout",
+            )
+        except Exception as e:
+            self._logger.error(
+                "Shadow action 通道异常: {}, request_id={}".format(
+                    e, request_id))
+            return RouterResult(
+                api_code=None, sequence=None,
+                response="",
+                route=ROUTE_ACTION_CHANNEL,
+                action_latency_ms=0.0,
+                request_id=request_id,
+                _action_status="error",
+            )
+
+    def _build_shadow_comparison(self, legacy_result, dual_result):
+        # type: (RouterResult, RouterResult) -> Dict[str, Any]
+        """构建 shadow 对比数据（同步版，双结果均已完成）
+
+        dual_status 语义:
           "ok"             — action channel 正常返回（含 a=null）
-          "timeout"        — Ollama 调用超时（action channel 内部 5s 或 wait_for 5s）
+          "timeout"        — Ollama 调用超时
           "error"          — 异常（代码错误、网络断等）
           "invalid_output" — 模型输出非法 api_code/sequence，校验后清零
         """
-        try:
-            dual_result = await asyncio.wait_for(
-                asyncio.shield(dual_task), timeout=5.0)
+        dual_status = getattr(dual_result, '_action_status', 'ok')
 
-            # 从 _action_status 读取结构化状态（不再依赖 raw_llm_output 哨兵）
-            dual_status = getattr(dual_result, '_action_status', 'ok')
-
-            if dual_status != "ok":
-                # 非正常状态: 不做决策对比（避免 invalid_output 的 None 与 a=null 混淆）
-                return {
-                    "legacy_api_code": legacy_result.api_code,
-                    "legacy_sequence": legacy_result.sequence,
-                    "dual_api_code": dual_result.api_code,
-                    "dual_sequence": dual_result.sequence,
-                    "dual_status": dual_status,
-                    "raw_agreement": False,
-                    "high_risk_divergence": False,
-                    "legacy_ms": legacy_result.action_latency_ms,
-                    "dual_ms": dual_result.action_latency_ms,
-                }
-
-            # 正常状态: 完整决策对比（SafetyCompiler 前）
-            raw_agreement = (
-                legacy_result.api_code == dual_result.api_code
-                and legacy_result.sequence == dual_result.sequence
-            )
-
-            # 高风险分歧检测
-            legacy_codes = self._extract_action_codes(legacy_result)
-            dual_codes = self._extract_action_codes(dual_result)
-            high_risk_divergence = bool(
-                (legacy_codes & HIGH_ENERGY_ACTIONS)
-                != (dual_codes & HIGH_ENERGY_ACTIONS)
-            )
-
+        if dual_status != "ok":
             return {
                 "legacy_api_code": legacy_result.api_code,
                 "legacy_sequence": legacy_result.sequence,
                 "dual_api_code": dual_result.api_code,
                 "dual_sequence": dual_result.sequence,
-                "dual_status": "ok",
-                "raw_agreement": raw_agreement,
-                "high_risk_divergence": high_risk_divergence,
+                "dual_status": dual_status,
+                "raw_agreement": False,
+                "high_risk_divergence": False,
                 "legacy_ms": legacy_result.action_latency_ms,
                 "dual_ms": dual_result.action_latency_ms,
             }
 
-        except asyncio.TimeoutError:
-            self._logger.warning(
-                "Shadow dual 超时 (>5s), request_id={}".format(
-                    legacy_result.request_id))
-            if not dual_task.done():
-                dual_task.cancel()
-            return {
-                "legacy_api_code": legacy_result.api_code,
-                "legacy_sequence": legacy_result.sequence,
-                "dual_api_code": None,
-                "dual_sequence": None,
-                "dual_status": "timeout",
-                "raw_agreement": False,
-                "high_risk_divergence": False,
-                "legacy_ms": legacy_result.action_latency_ms,
-                "dual_ms": 5000.0,
-            }
+        raw_agreement = (
+            legacy_result.api_code == dual_result.api_code
+            and legacy_result.sequence == dual_result.sequence
+        )
 
-        except Exception as e:
-            self._logger.error(
-                "Shadow dual 异常: {}, request_id={}".format(
-                    e, legacy_result.request_id))
-            return {
-                "legacy_api_code": legacy_result.api_code,
-                "legacy_sequence": legacy_result.sequence,
-                "dual_api_code": None,
-                "dual_sequence": None,
-                "dual_status": "error",
-                "raw_agreement": False,
-                "high_risk_divergence": False,
-                "error": str(e),
-            }
+        legacy_codes = self._extract_action_codes(legacy_result)
+        dual_codes = self._extract_action_codes(dual_result)
+        high_risk_divergence = bool(
+            (legacy_codes & HIGH_ENERGY_ACTIONS)
+            != (dual_codes & HIGH_ENERGY_ACTIONS)
+        )
+
+        return {
+            "legacy_api_code": legacy_result.api_code,
+            "legacy_sequence": legacy_result.sequence,
+            "dual_api_code": dual_result.api_code,
+            "dual_sequence": dual_result.sequence,
+            "dual_status": "ok",
+            "raw_agreement": raw_agreement,
+            "high_risk_divergence": high_risk_divergence,
+            "legacy_ms": legacy_result.action_latency_ms,
+            "dual_ms": dual_result.action_latency_ms,
+        }
 
     @staticmethod
     def _extract_action_codes(result):
