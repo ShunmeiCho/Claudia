@@ -113,7 +113,8 @@ class ProductionCommander:
                     format='json',
                     options={
                         'num_predict': 1,   # 只生成1个token，最小开销
-                        'num_ctx': 256,
+                        'num_ctx': 2048,    # 必须与 _call_ollama_v2 默认值一致
+                                            # 否则 Ollama 重分配 KV cache 导致二次冷启动
                     },
                     keep_alive='30m',
                 )
@@ -132,6 +133,47 @@ class ProductionCommander:
             print("⚠️ 模型预热超时 (60s)，继续启动")
         except Exception as e:
             print("⚠️ 模型预热失败: {}，继续启动".format(e))
+
+    async def _wakeup_animation(self):
+        """唤醒动画 — 机器人起立+伸懒腰
+
+        直接调用 _rpc_call 绕过 pipeline（已知安全动作，无需 SafetyCompiler）。
+        与 _warmup_model 并行执行，利用 LLM 加载等待时间。
+        仅在真实硬件模式且 SportClient 可用时执行。
+        """
+        if not self.brain.use_real_hardware or not self.brain.sport_client:
+            return
+
+        print("🐕 唤醒动画: 起立 → 伸懒腰")
+        try:
+            # StandUp(1004) — 站起来
+            result = self.brain._rpc_call("StandUp")
+            code = result[0] if isinstance(result, tuple) else result
+            if code not in (0, -1, 3104):
+                print("⚠️ 起立失败 (code={}), 跳过伸懒腰".format(code))
+                return
+
+            # 3104=超时但动作可能在执行中，等待站立完成
+            if code == 3104:
+                await asyncio.sleep(3.0)
+            else:
+                await asyncio.sleep(1.5)
+
+            # Stretch(1017) — 伸懒腰
+            result = self.brain._rpc_call("Stretch")
+            code = result[0] if isinstance(result, tuple) else result
+            if code in (0, -1, 3104):
+                # Stretch 动画 ~3-5s，等待完成
+                await asyncio.sleep(4.0)
+                print("✅ 唤醒动画完成")
+            else:
+                print("⚠️ 伸懒腰失败 (code={})".format(code))
+
+            # 更新姿态跟踪（已知站立状态）
+            self.brain._update_posture_tracking(1004)
+
+        except Exception as e:
+            print("⚠️ 唤醒动画异常: {}，继续启动".format(e))
 
     async def process_command(self, command: str):
         """处理单个命令"""
@@ -194,11 +236,13 @@ class ProductionCommander:
     async def run(self):
         """运行主循环"""
         self.print_header()
-        
-        # 预热模型: 直接调用 Ollama API 将模型加载到 GPU 显存
-        # 注意: 不能用 process_command("hello") — "hello" 命中 hot_cache，
-        # 会跳过 LLM 推理，模型不会被加载到显存中
-        await self._warmup_model()
+
+        # 并行执行: LLM 预热 + 唤醒动画（起立→伸懒腰）
+        # LLM 冷加载 5-25s，唤醒动画 ~8s，并行执行不增加等待时间
+        await asyncio.gather(
+            self._warmup_model(),
+            self._wakeup_animation(),
+        )
         print("")
         
         # 主循环
