@@ -113,7 +113,7 @@ class ProductionBrain:
 
         # 统一使用7B模型（支持环境变量切换）
         import os
-        self.model_7b = os.getenv("BRAIN_MODEL_7B", "claudia-go2-7b:v12.2-complete")  # 完整API支持（v12.2新增运动控制）
+        self.model_7b = os.getenv("BRAIN_MODEL_7B", "claudia-7b:v2.0")
 
         self.logger.info(f"🧠 📌 7B模型: {self.model_7b}")
         
