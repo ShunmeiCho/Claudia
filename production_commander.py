@@ -100,37 +100,58 @@ class ProductionCommander:
 
         不走 process_command 管线（会命中 hot_cache 绕过 LLM）。
         发送一个极短的推理请求，触发 Ollama 将模型权重加载到显存。
+
+        Dual/Shadow 模式时，同时预热 Action 模型（num_ctx=1024 匹配 _action_channel）。
+        注意: Jetson 8GB VRAM 只能容纳一个 4.7GB 模型，
+        第二个模型的预热会将第一个换出，但 Ollama 的调度器会按需重新加载。
+        目的是让两个模型都至少被加载过一次，减少首次推理的额外开销。
         """
         print("🔄 预热模型中...")
         try:
             import ollama as _ollama
             model_name = self.brain.model_7b
 
-            def _sync_warmup():
+            def _sync_warmup(model, num_ctx):
                 return _ollama.chat(
-                    model=model_name,
+                    model=model,
                     messages=[{'role': 'user', 'content': 'hi'}],
                     format='json',
                     options={
-                        'num_predict': 1,   # 只生成1个token，最小开销
-                        'num_ctx': 2048,    # 必须与 _call_ollama_v2 默认值一致
-                                            # 否则 Ollama 重分配 KV cache 导致二次冷启动
+                        'num_predict': 1,
+                        'num_ctx': num_ctx,
                     },
                     keep_alive='30m',
                 )
 
             loop = asyncio.get_event_loop()
+
+            # 预热 7B 主模型（所有模式都用）
             start = time.time()
             await asyncio.wait_for(
-                loop.run_in_executor(None, _sync_warmup),
-                timeout=60  # 冷加载可能需要较长时间
+                loop.run_in_executor(None, _sync_warmup, model_name, 2048),
+                timeout=60,
             )
             elapsed = (time.time() - start) * 1000
             print("✅ 模型就绪 ({}: {:.0f}ms)".format(model_name, elapsed))
+
+            # Dual/Shadow 模式: 预热 Action 模型
+            from src.claudia.brain.channel_router import RouterMode
+            if self.brain._router_mode != RouterMode.LEGACY:
+                action_model = self.brain._channel_router._action_model
+                start = time.time()
+                await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None, _sync_warmup, action_model, 1024),
+                    timeout=30,
+                )
+                elapsed = (time.time() - start) * 1000
+                print("✅ Action 模型就绪 ({}: {:.0f}ms)".format(
+                    action_model, elapsed))
+
         except ImportError:
             print("⚠️ ollama 库不可用，跳过预热")
         except asyncio.TimeoutError:
-            print("⚠️ 模型预热超时 (60s)，继续启动")
+            print("⚠️ 模型预热超时，继续启动")
         except Exception as e:
             print("⚠️ 模型预热失败: {}，继续启动".format(e))
 
@@ -139,41 +160,85 @@ class ProductionCommander:
 
         直接调用 _rpc_call 绕过 pipeline（已知安全动作，无需 SafetyCompiler）。
         与 _warmup_model 并行执行，利用 LLM 加载等待时间。
-        仅在真实硬件模式且 SportClient 可用时执行。
+
+        安全门控:
+          - 仅在真实硬件模式且 SportClient 可用时执行
+          - 需要 COMMANDER_WAKEUP_ANIMATION=1 显式启用（默认关闭）
+          - 姿态跟踪仅在确认站立后更新（不做乐观写入）
         """
         if not self.brain.use_real_hardware or not self.brain.sport_client:
             return
 
+        if os.environ.get("COMMANDER_WAKEUP_ANIMATION") != "1":
+            return
+
         print("🐕 唤醒动画: 起立 → 伸懒腰")
+        wakeup_start = time.time()
+        standup_code = None
+        stretch_code = None
         try:
-            # StandUp(1004) — 站起来
+            # StandUp(1004)
             result = self.brain._rpc_call("StandUp")
-            code = result[0] if isinstance(result, tuple) else result
-            if code not in (0, -1, 3104):
-                print("⚠️ 起立失败 (code={}), 跳过伸懒腰".format(code))
+            standup_code = result[0] if isinstance(result, tuple) else result
+            if standup_code not in (0, -1, 3104):
+                print("⚠️ 起立失败 (code={}), 跳过伸懒腰".format(standup_code))
                 return
 
-            # 3104=超时但动作可能在执行中，等待站立完成
-            if code == 3104:
-                await asyncio.sleep(3.0)
-            else:
+            # 姿态跟踪: 仅在确认成功时更新（与 _execute_real 的 fail-safe 原则一致）
+            if standup_code in (0, -1):
+                self.brain._update_posture_tracking(1004)
                 await asyncio.sleep(1.5)
+            elif standup_code == 3104:
+                # 3104: 通过 GetState 短轮询确认站立，不做乐观写入
+                await asyncio.sleep(2.0)
+                standing_ok = await self.brain._verify_standing_after_unknown()
+                if standing_ok:
+                    self.brain._update_posture_tracking(1004)
+                else:
+                    print("⚠️ 起立未确认 (3104), 跳过伸懒腰")
+                    return
 
-            # Stretch(1017) — 伸懒腰
+            # Stretch(1017)
             result = self.brain._rpc_call("Stretch")
-            code = result[0] if isinstance(result, tuple) else result
-            if code in (0, -1, 3104):
-                # Stretch 动画 ~3-5s，等待完成
+            stretch_code = result[0] if isinstance(result, tuple) else result
+            if stretch_code in (0, -1, 3104):
                 await asyncio.sleep(4.0)
                 print("✅ 唤醒动画完成")
             else:
-                print("⚠️ 伸懒腰失败 (code={})".format(code))
-
-            # 更新姿态跟踪（已知站立状态）
-            self.brain._update_posture_tracking(1004)
+                print("⚠️ 伸懒腰失败 (code={})".format(stretch_code))
 
         except Exception as e:
             print("⚠️ 唤醒动画异常: {}，继续启动".format(e))
+        finally:
+            self._log_wakeup_audit(standup_code, stretch_code, wakeup_start)
+
+    def _log_wakeup_audit(self, standup_code, stretch_code, start_time):
+        """记录唤醒动画的审计条目"""
+        try:
+            from src.claudia.brain.audit_logger import AuditEntry, get_audit_logger
+            elapsed = (time.time() - start_time) * 1000
+            entry = AuditEntry(
+                timestamp=datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                model_name="wakeup_animation",
+                input_command="__wakeup__",
+                state_battery=None,
+                state_standing=None,
+                state_emergency=False,
+                llm_output=None,
+                api_code=1004,
+                sequence=[1004, 1017] if stretch_code is not None else [1004],
+                safety_verdict="ok",
+                safety_reason=None,
+                elapsed_ms=elapsed,
+                cache_hit=False,
+                route="startup",
+                success=(standup_code in (0, -1)
+                         and (stretch_code is None
+                              or stretch_code in (0, -1, 3104))),
+            )
+            get_audit_logger().log_entry(entry)
+        except Exception:
+            pass  # 审计失败不阻塞启动
 
     async def process_command(self, command: str):
         """处理单个命令"""

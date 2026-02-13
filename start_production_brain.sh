@@ -63,6 +63,13 @@ case $choice in
         echo "⚠️  真实硬件模式 - 请确保机器人已连接"
         read -p "确认继续? [y/N]: " confirm
         if [[ $confirm == [yY] ]]; then
+            # 唤醒动画（起立→伸懒腰）— 默认关闭，需显式启用
+            if [ -z "$COMMANDER_WAKEUP_ANIMATION" ]; then
+                read -p "启用唤醒动画（起立→伸懒腰）? [y/N]: " wakeup
+                if [[ $wakeup == [yY] ]]; then
+                    export COMMANDER_WAKEUP_ANIMATION=1
+                fi
+            fi
             echo ""
             echo "✅ 启动真实硬件模式..."
             echo ""
