@@ -71,7 +71,7 @@
 
 ### 1. 7B模型配置（极简JSON）
 
-**Modelfile**: `models/ClaudiaIntelligent_7B_v2.0.modelfile`
+**Modelfile**: `models/ClaudiaIntelligent_7B_v2.0`
 
 ```modelfile
 FROM qwen2.5:7b

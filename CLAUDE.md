@@ -68,16 +68,20 @@ export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp   # Required for Go2 DDS
 export CYCLONEDDS_URI='...'                     # eth0 network interface config
 export PYTHONPATH=/home/m1ng/claudia/unitree_sdk2_python:$PYTHONPATH  # SDK imports
 export BRAIN_MODEL_7B=claudia-go2-7b:v12.2-complete  # Override LLM model
+
+# PR2: Dual-channel routing
+export BRAIN_ROUTER_MODE=legacy   # "legacy" (default) | "dual" | "shadow"
+export BRAIN_MODEL_ACTION=claudia-action-v1  # Action channel model name
 ```
 
 ## Architecture
 
 ### Command Processing Pipeline (`src/claudia/brain/production_brain.py`)
 
-`ProductionBrain.process_command()` is the core entry point. Commands flow through a **5-stage pipeline** with early-exit at each stage:
+`ProductionBrain.process_and_execute()` is the atomic entry point (PR2). Commands flow through `process_command()` — a **5-stage pipeline** with early-exit at each stage:
 
 ```
-User Input
+User Input → process_and_execute()
   ↓
 1. Emergency Bypass    — hardcoded stop/halt commands, ~0ms, bypasses everything
   ↓
@@ -87,24 +91,34 @@ User Input
   ↓
 4. Conversational Detection — pattern-matching for greetings/questions, returns text-only (no API)
   ↓
-5. LLM Inference       — 7B model via Ollama, outputs JSON {"response":"...", "api_code":N}
-                          Complex commands (detected via sequence_keywords) get sequence mode
+5. LLM Inference (BRAIN_ROUTER_MODE controls routing):
+   - legacy: 7B model via Ollama → JSON {"response":"...", "api_code":N}
+   - dual:   Action channel (action-only model, ~30 tokens) → template response
+             a=null → Voice channel (legacy LLM for text)
+   - shadow: Legacy wins, Dual runs in parallel for A/B comparison logging
   ↓
 Post-processing:
-  - SafetyValidator: checks action dependencies (e.g., Hello requires standing → auto-prepend StandUp)
-  - Final Safety Gate: hard battery cutoffs (≤10%: whitelist only, ≤20%: no high-energy, ≤30%: downgrade to Dance)
+  - SafetyCompiler: validates ALL router modes (Invariant 1 — never bypassed)
   - State tracking: updates last_posture_standing based on executed API
-  - Audit logging: full trace of route, model, timing, safety verdict
+  - Audit logging: route, model, timing, safety verdict, shadow comparison (if any)
+  ↓
+execute_action() → SportClient RPC (or mock)
+  ↓
+execution_status: "success" | "unknown" | "failed" | "skipped"
 ```
 
 ### Key Design Decisions
 
-- **Single 7B model** (not hybrid 3B/7B anymore): `claudia-go2-7b:v12.2-complete`, configurable via `BRAIN_MODEL_7B` env var
+- **Atomic entry point**: `process_and_execute()` handles process + execute + status in one call. Direct `process_command()` calls emit deprecation warning via `contextvars.ContextVar`
+- **Dual-channel routing** (PR2): `ChannelRouter` in `channel_router.py` is **decision-only** — never executes or calls SafetyCompiler. Three modes via `BRAIN_ROUTER_MODE` env var (default: `legacy`)
+- **Single 7B model** (legacy): `claudia-go2-7b:v12.2-complete`, configurable via `BRAIN_MODEL_7B` env var
+- **Action model** (dual/shadow): `claudia-action-v1`, `num_predict=30`, `temperature=0.0`, outputs only `{"a":N}` or `{"s":[...]}` or `{"a":null}`
 - **Ollama JSON mode**: `format='json'` with `temperature=0.0` for deterministic output
 - **Graceful fallback chain**: Real SportClient → MockSportClient → simulation mode. Error 3103 (sport mode occupied by Unitree app) auto-falls back to mock.
 - **LRU cache on `_call_ollama`**: subprocess-based fallback path caches results
 - **Async LLM calls**: `_call_ollama_v2` uses `asyncio.wait_for` + thread executor (Python 3.8 compatible, no `asyncio.to_thread`)
 - **Response sanitization**: `_sanitize_response()` rejects non-Japanese LLM output (checks for hiragana/katakana/kanji)
+- **Shadow mode**: Legacy result returned to user; dual result logged for comparison. 5s timeout, request_id tracking, high_risk_divergence detection
 
 ### Robot Actions (API Codes)
 
@@ -120,10 +134,13 @@ Actions requiring standing state: 1016, 1017, 1022, 1023, 1029, 1030, 1031, 1032
 
 | Module | Role |
 |--------|------|
-| `brain/production_brain.py` | Core pipeline: cache → LLM → safety → execution |
+| `brain/production_brain.py` | Core pipeline: cache → router → safety → execution |
+| `brain/channel_router.py` | PR2: Dual-channel LLM router (legacy/dual/shadow modes) |
+| `brain/action_registry.py` | Action definitions, VALID_API_CODES, template responses |
+| `brain/safety_compiler.py` | SafetyCompiler: action validation, standing deps, battery gates |
 | `brain/mock_sport_client.py` | Simulates SportClient with realistic delays and return codes |
-| `brain/safety_validator.py` | Action dependency checks, standing requirements, risk assessment |
-| `brain/audit_logger.py` | Structured audit trail to `logs/audit/` |
+| `brain/audit_logger.py` | Structured audit trail to `logs/audit/` with PR2 extensions |
+| `brain/audit_routes.py` | Route constants (all _log_audit route= values) |
 | `robot_controller/system_state_monitor.py` | ROS2-based battery/posture monitoring at 5Hz |
 | `robot_controller/unified_led_controller.py` | LED mode API (thinking/success/error/listening) |
 | `robot_controller/led_state_machine.py` | State-based LED transitions |
@@ -168,4 +185,4 @@ Robot IP: `192.168.123.161` via `eth0`
 - **Cleanup**: `bash scripts/maintenance/daily_cleanup.sh`
 - **Test structure**: `test/unit/`, `test/integration/`, `test/hardware/` — each with `__init__.py`
 - **Config**: `config/default.yaml`, `.env.ros2` (auto-generated)
-- **Model files**: `models/ClaudiaIntelligent_7B_v2.0.modelfile` — Ollama modelfile for creating the brain model
+- **Model files**: `models/ClaudiaIntelligent_7B_v2.0` — Ollama Modelfile for creating the brain model (no extension, per Ollama convention)
