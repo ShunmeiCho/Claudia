@@ -686,16 +686,23 @@ class TestCommanderUnknownBranch:
         assert result is not True
         assert result != "unknown"
 
-    def test_commander_source_uses_is_true(self):
-        """production_commander.py 使用 'result is True' 而非 'if result:'"""
+    def test_commander_source_uses_execution_status(self):
+        """production_commander.py 使用 execution_status 而非直接 result 检查
+
+        PR2-A: Commander 已迁移至 process_and_execute()，
+        执行结果通过 execution_status 字段区分（不再直接检查 execute_action 返回值）
+        """
         import pathlib
         commander_path = pathlib.Path(__file__).parent.parent.parent / "production_commander.py"
         source = commander_path.read_text(encoding="utf-8")
-        assert "result is True" in source, (
-            "production_commander.py 应使用 'result is True' 而非 'if result:'"
+        assert 'execution_status == "success"' in source, (
+            "production_commander.py 应使用 execution_status==\"success\" 区分成功"
         )
-        assert 'result == "unknown"' in source, (
-            "production_commander.py 应显式检查 'unknown' 分支"
+        assert 'execution_status == "unknown"' in source, (
+            "production_commander.py 应使用 execution_status==\"unknown\" 区分超时"
+        )
+        assert 'execution_status == "failed"' in source, (
+            "production_commander.py 应使用 execution_status==\"failed\" 区分失败"
         )
 
 

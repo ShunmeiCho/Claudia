@@ -103,6 +103,15 @@ HIGH_ENERGY_ACTIONS: FrozenSet[int] = frozenset(
     a.api_code for a in _ACTIONS if a.risk_level == "high"
 )
 
+# Action 模型可见动作（默认排除高风险 — 防止决策噪声）
+# allow_high_risk=False 时 SafetyCompiler 会拒绝高风险动作，
+# 如果 modelfile 里包含这些动作，模型会"学到"可以选它们，
+# 造成选中→拒绝→无效回退的循环。
+ACTION_MODEL_API_CODES: FrozenSet[int] = frozenset(
+    a.api_code for a in _ACTIONS
+    if a.enabled and not a.has_params and a.risk_level != "high"
+)
+
 # api_code → SportClient 方法名
 METHOD_MAP: Dict[int, str] = {
     a.api_code: a.method for a in _ACTIONS if a.enabled
@@ -144,15 +153,22 @@ def _remove_suffix(s: str, suffix: str) -> str:
     return s
 
 
-def generate_modelfile_action_block() -> str:
+def generate_modelfile_action_block(include_high_risk=True) -> str:
     """从 registry 自动生成 Modelfile 中的动作列表段
 
     用于: Modelfile 自动生成 / 一致性校验
-    确保 Modelfile 动作列表与 VALID_API_CODES 始终一致
+    确保 Modelfile 动作列表与 registry 始终一致
+
+    Args:
+        include_high_risk: True=VALID_API_CODES（7B 模型用），
+                          False=ACTION_MODEL_API_CODES（Action 模型用，排除高风险）
     """
     lines = []
     for a in sorted(_ACTIONS, key=lambda x: x.api_code):
-        if a.enabled and not a.has_params:
-            short_name = _remove_suffix(a.name_ja, "します")
-            lines.append(f"{a.api_code}={short_name}")
+        if not a.enabled or a.has_params:
+            continue
+        if not include_high_risk and a.risk_level == "high":
+            continue
+        short_name = _remove_suffix(a.name_ja, "します")
+        lines.append(f"{a.api_code}={short_name}")
     return " ".join(lines)

@@ -29,6 +29,21 @@ echo ""
 # 可能覆盖上面设置的 CYCLONEDDS_HOME，造成路径不一致）
 # setup_cyclonedds.sh 仅用于首次安装 CycloneDDS，不在运行时加载
 
+# PR2: 检查并创建 Action 模型（仅在非 legacy 模式下需要）
+ROUTER_MODE="${BRAIN_ROUTER_MODE:-legacy}"
+if [ "$ROUTER_MODE" != "legacy" ]; then
+    ACTION_MODEL="${BRAIN_MODEL_ACTION:-claudia-action-v1}"
+    if ! ollama list 2>/dev/null | grep -q "$ACTION_MODEL"; then
+        echo "📦 创建 Action 模型: $ACTION_MODEL ..."
+        ollama create "$ACTION_MODEL" -f models/ClaudiaAction_v1.0
+        echo "✅ Action 模型已创建"
+    else
+        echo "✅ Action 模型已存在: $ACTION_MODEL"
+    fi
+    echo "   路由模式: $ROUTER_MODE"
+    echo ""
+fi
+
 # 询问模式
 echo "请选择运行模式:"
 echo "1) 模拟模式 (安全测试)"
