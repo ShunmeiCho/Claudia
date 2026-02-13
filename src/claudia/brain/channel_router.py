@@ -351,24 +351,42 @@ class ChannelRouter:
             dual_result = await asyncio.wait_for(
                 asyncio.shield(dual_task), timeout=5.0)
 
-            # 原始决策对比（SafetyCompiler 前）
-            raw_agreement = (
-                legacy_result.api_code == dual_result.api_code
-                and legacy_result.sequence == dual_result.sequence
+            # Finding #1 修复: action channel 内部超时/错误通过哨兵值区分
+            # raw_llm_output="timeout/error" 表示 Ollama 调用失败（allow_fallback=False 路径）
+            # 此时 api_code=None 不代表 conversational（a=null），而是真正的失败
+            dual_failed = (
+                getattr(dual_result, 'raw_llm_output', '') == "timeout/error"
             )
 
-            # 高风险分歧检测
-            legacy_codes = self._extract_action_codes(legacy_result)
-            dual_codes = self._extract_action_codes(dual_result)
-            high_risk_divergence = bool(
-                (legacy_codes & HIGH_ENERGY_ACTIONS) != (dual_codes & HIGH_ENERGY_ACTIONS)
-            )
+            if dual_failed:
+                # action channel 自身超时/失败，编码为 "timeout"（与 wait_for 超时一致）
+                dual_api_for_log = "timeout"
+                dual_seq_for_log = None
+                raw_agreement = False
+                high_risk_divergence = False
+            else:
+                dual_api_for_log = dual_result.api_code
+                dual_seq_for_log = dual_result.sequence
+
+                # 原始决策对比（SafetyCompiler 前）
+                raw_agreement = (
+                    legacy_result.api_code == dual_result.api_code
+                    and legacy_result.sequence == dual_result.sequence
+                )
+
+                # 高风险分歧检测
+                legacy_codes = self._extract_action_codes(legacy_result)
+                dual_codes = self._extract_action_codes(dual_result)
+                high_risk_divergence = bool(
+                    (legacy_codes & HIGH_ENERGY_ACTIONS)
+                    != (dual_codes & HIGH_ENERGY_ACTIONS)
+                )
 
             return {
                 "legacy_api_code": legacy_result.api_code,
                 "legacy_sequence": legacy_result.sequence,
-                "dual_api_code": dual_result.api_code,
-                "dual_sequence": dual_result.sequence,
+                "dual_api_code": dual_api_for_log,
+                "dual_sequence": dual_seq_for_log,
                 "raw_agreement": raw_agreement,
                 "high_risk_divergence": high_risk_divergence,
                 "legacy_ms": legacy_result.action_latency_ms,

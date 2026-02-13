@@ -381,6 +381,42 @@ class TestShadowRoute:
         finally:
             loop.close()
 
+    def test_shadow_action_channel_internal_timeout_encoded(self):
+        """Finding #1: action channel 内部超时(raw=None) → dual_api_code='timeout'
+
+        当 _call_ollama_v2 返回 None（Ollama 自身超时）且 allow_fallback=False 时，
+        _action_channel 返回 raw_llm_output="timeout/error"。
+        _build_shadow_comparison 应识别此哨兵值，编码 dual_api_code="timeout"，
+        而非 None（否则与 conversational a=null 混淆）。
+        """
+        brain = _make_brain()
+        router = ChannelRouter(brain, RouterMode.SHADOW)
+
+        call_count = [0]
+
+        async def mock_ollama(model, command, timeout=10, **kwargs):
+            call_count[0] += 1
+            if model == "claudia-action-v1":
+                return None  # Ollama 内部超时，返回 None
+            else:
+                return {"r": "座ります", "a": 1009}
+
+        brain._call_ollama_v2 = mock_ollama
+        brain._sanitize_response = lambda x: x
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(router.route("座って"))
+            sc = result.shadow_comparison
+            assert sc is not None, "shadow_comparison 应存在"
+            # 关键断言: 内部超时编码为 "timeout"，不是 None
+            assert sc["dual_api_code"] == "timeout", \
+                "action channel 内部超时应编码为 'timeout', got: {}".format(
+                    sc["dual_api_code"])
+            assert sc["raw_agreement"] is False
+        finally:
+            loop.close()
+
 
 # === B5: SafetyCompiler 在所有模式下验证（Invariant 1） ===
 

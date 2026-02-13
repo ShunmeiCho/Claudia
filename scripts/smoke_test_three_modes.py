@@ -42,17 +42,24 @@ def create_brain(mode):
     from claudia.brain.production_brain import ProductionBrain
     brain = ProductionBrain(use_real_hardware=False)
 
-    # 提供 mock state_monitor (battery=0.80, standing=True)
-    from unittest.mock import MagicMock
-    mock_state = MagicMock()
-    mock_state.battery_level = 0.80
-    mock_state.is_standing = True
-    mock_state.is_moving = False
-    mock_state.temperature = 40.0
-    mock_state.timestamp = 0.0
-    mock_monitor = MagicMock()
-    mock_monitor.get_current_state.return_value = mock_state
-    mock_monitor.is_ros_initialized = True
+    # Finding #4 修复: 使用具名属性（非 MagicMock），避免日志 source=<MagicMock...>
+    from types import SimpleNamespace
+    mock_state = SimpleNamespace(
+        battery_level=0.80,
+        is_standing=True,
+        is_moving=False,
+        temperature=40.0,
+        timestamp=0.0,
+        source="smoke_test",       # 明确标识数据来源
+        confidence=1.0,
+        current_gait="unknown",
+        network_status="unknown",
+        sdk_connection=False,
+    )
+    mock_monitor = SimpleNamespace(
+        get_current_state=lambda: mock_state,
+        is_ros_initialized=True,
+    )
     brain.state_monitor = mock_monitor
     return brain
 
@@ -131,8 +138,12 @@ def judge_llm_result(output, expected, elapsed_ms):
         return True, "PASS"
 
 
-def read_recent_audit_entries(n=50):
-    """从 audit log 读取最近 n 条 shadow_comparison 记录"""
+def read_recent_audit_entries(n=50, after_ts=None):
+    """从 audit log 读取最近 n 条 shadow_comparison 记录
+
+    Finding #3 修复: after_ts 为 ISO 时间戳字符串，只读取该时间之后的条目，
+    隔离本次运行的数据，避免历史 session 污染。
+    """
     audit_dir = Path("logs/audit")
     if not audit_dir.exists():
         return []
@@ -145,8 +156,12 @@ def read_recent_audit_entries(n=50):
                     continue
                 try:
                     entry = json.loads(line)
-                    if entry.get("shadow_comparison"):
-                        entries.append(entry)
+                    if not entry.get("shadow_comparison"):
+                        continue
+                    # Finding #3: 时间窗过滤
+                    if after_ts and entry.get("timestamp", "") < after_ts:
+                        continue
+                    entries.append(entry)
                 except json.JSONDecodeError:
                     pass
         if len(entries) >= n:
@@ -157,6 +172,10 @@ def read_recent_audit_entries(n=50):
 def run_smoke_test():
     modes = ["legacy", "dual", "shadow"]
     results = {}  # mode -> [(cmd, pass, detail)]
+
+    # Finding #3: 记录本次运行的起始时间，用于隔离 audit 条目
+    from datetime import datetime
+    run_start_ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
     for mode in modes:
         print("\n" + "=" * 70)
@@ -201,7 +220,7 @@ def run_smoke_test():
     print("  SHADOW COMPARISON (from audit log)")
     print("=" * 70)
 
-    shadow_entries = read_recent_audit_entries(50)
+    shadow_entries = read_recent_audit_entries(50, after_ts=run_start_ts)
     if not shadow_entries:
         print("  (无 shadow_comparison 审计记录)")
     else:
@@ -227,7 +246,7 @@ def run_smoke_test():
         for e in shadow_entries[-5:]:
             sc = e["shadow_comparison"]
             print("    cmd='{}' legacy={} dual={} agree={} diverge={}".format(
-                e.get("command", "?")[:15],
+                e.get("input_command", "?")[:15],
                 sc.get("legacy_api_code"),
                 sc.get("dual_api_code"),
                 sc.get("raw_agreement"),
