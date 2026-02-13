@@ -120,10 +120,10 @@ class ProductionBrain:
         # 精简动作缓存（仅保留文化特定词和LLM容易出错的核心命令）
         self.hot_cache = {
             # === 文化特定词（必须保留）===
-            "ちんちん": {"response": "お辞儀します", "api_code": 1016},
-            "ちんちんして": {"response": "お辞儀します", "api_code": 1016},
-            "チンチン": {"response": "お辞儀します", "api_code": 1016},
-            "拜年": {"response": "お辞儀します", "api_code": 1016},
+            "ちんちん": {"response": "お辞儀します", "api_code": 1029},
+            "ちんちんして": {"response": "お辞儀します", "api_code": 1029},
+            "チンチン": {"response": "お辞儀します", "api_code": 1029},
+            "拜年": {"response": "お辞儀します", "api_code": 1029},
 
             # === 多语言急停（安全关键）===
             "止まって": {"response": "止まります", "api_code": 1003},
