@@ -228,10 +228,13 @@ def run_smoke_test():
                          if e["shadow_comparison"].get("raw_agreement"))
         divergences = sum(1 for e in shadow_entries
                           if e["shadow_comparison"].get("high_risk_divergence"))
+        # dual_status 语义: "ok"=正常, "timeout"=超时, "error"=异常, "invalid_output"=非法输出
         timeouts = sum(1 for e in shadow_entries
-                       if e["shadow_comparison"].get("dual_api_code") == "timeout")
+                       if e["shadow_comparison"].get("dual_status") == "timeout")
         errors = sum(1 for e in shadow_entries
-                     if e["shadow_comparison"].get("dual_api_code") == "error")
+                     if e["shadow_comparison"].get("dual_status") == "error")
+        invalids = sum(1 for e in shadow_entries
+                       if e["shadow_comparison"].get("dual_status") == "invalid_output")
 
         print("  条目数: {}".format(len(shadow_entries)))
         print("  一致率: {:.1f}% ({}/{})".format(
@@ -240,15 +243,17 @@ def run_smoke_test():
         print("  高风险分歧: {}".format(divergences))
         print("  Action 超时: {}".format(timeouts))
         print("  Action 错误: {}".format(errors))
+        print("  非法输出:   {}".format(invalids))
 
         # 逐条详情（最后 5 条）
         print("\n  最近 {} 条:".format(min(5, len(shadow_entries))))
         for e in shadow_entries[-5:]:
             sc = e["shadow_comparison"]
-            print("    cmd='{}' legacy={} dual={} agree={} diverge={}".format(
+            print("    cmd='{}' legacy={} dual={} status={} agree={} diverge={}".format(
                 e.get("input_command", "?")[:15],
                 sc.get("legacy_api_code"),
                 sc.get("dual_api_code"),
+                sc.get("dual_status", "?"),
                 sc.get("raw_agreement"),
                 sc.get("high_risk_divergence"),
             ))

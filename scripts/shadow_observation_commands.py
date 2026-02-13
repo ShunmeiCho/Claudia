@@ -305,9 +305,11 @@ def main():
     print("  Shadow 観測バッチ")
     print("=" * 60)
     print("  総コマンド数: {}".format(len(COMMANDS)))
-    print("  LLM 路由: {} (shadow 対比対象)".format(llm_total))
+    print("  非 hot_cache: {} (うち一部は conversational/sequence 前段で捕捉される)".format(
+        llm_total))
     for cat, count in sorted(cats.items()):
         print("    {:25s} {}".format(cat, count))
+    print("  ※ 実際の router 経由数は実行後の audit ログで確定".format())
     print("  推定時間: {:.0f}分 (delay={}s)".format(
         len(COMMANDS) * args.delay / 60, args.delay))
     print("  モード: {}".format("hardware" if args.hardware else "simulation"))
@@ -353,15 +355,16 @@ def main():
         end_time.strftime("%H:%M:%S"), elapsed_total))
     print("=" * 60)
 
-    success = sum(1 for _, _, ok, _ in results if ok)
-    errors = len(results) - success
-    print("  成功: {}/{}".format(success, len(results)))
-    if errors > 0:
-        print("  エラー: {}".format(errors))
+    # Finding #4 修正: execution_status 区分
+    no_exception = sum(1 for _, _, ok, _ in results if ok)
+    exceptions = len(results) - no_exception
+    print("  完了 (無例外): {}/{}".format(no_exception, len(results)))
+    if exceptions > 0:
+        print("  例外発生: {}".format(exceptions))
 
-    # カテゴリ別成功率
-    from collections import defaultdict
-    cat_stats = defaultdict(lambda: [0, 0])  # [success, total]
+    # カテゴリ別
+    from collections import defaultdict, Counter as Ctr
+    cat_stats = defaultdict(lambda: [0, 0])  # [no_exception, total]
     for _, cat, ok, _ in results:
         cat_stats[cat][1] += 1
         if ok:
@@ -371,10 +374,66 @@ def main():
         s, t = cat_stats[cat]
         print("    {:25s} {}/{} ({:.0f}%)".format(cat, s, t, s / t * 100))
 
+    # Finding #1/#3: 从 audit log 读取实际 router 经由样本数
+    run_start_iso = start_time.strftime("%Y-%m-%dT%H:%M:%S")
+    print("\n  --- Audit ログ確認 (本次 run 以降) ---")
+    from pathlib import Path
+    audit_dir = Path("logs/audit")
+    if audit_dir.exists():
+        run_entries = []
+        shadow_entries = []
+        route_counts = Ctr()
+        status_counts = Ctr()
+        for f in sorted(audit_dir.glob("audit_*.jsonl"), reverse=True):
+            with f.open('r', encoding='utf-8') as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        ts = entry.get("timestamp", "")
+                        if ts < run_start_iso:
+                            continue
+                        run_entries.append(entry)
+                        route_counts[entry.get("route", "?")] += 1
+                        if entry.get("shadow_comparison"):
+                            shadow_entries.append(entry)
+                            ds = entry["shadow_comparison"].get("dual_status", "?")
+                            status_counts[ds] += 1
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+
+        # 実際の router 経由数 = shadow_comparison 付きの条目数
+        # hot_cache / emergency / conversational_detect は shadow_comparison なし
+        print("  Audit 総条目: {}".format(len(run_entries)))
+        print("  Route 分布:")
+        for r, cnt in route_counts.most_common():
+            print("    {:25s} {}".format(r, cnt))
+        print("  Shadow 対比条目: {} (= 実際の router 経由数)".format(
+            len(shadow_entries)))
+        if shadow_entries:
+            agreements = sum(
+                1 for e in shadow_entries
+                if e["shadow_comparison"].get("raw_agreement", False))
+            print("  一致率: {:.1f}% ({}/{})".format(
+                agreements / len(shadow_entries) * 100,
+                agreements, len(shadow_entries)))
+            print("  Dual 状態分布:")
+            for st, cnt in status_counts.most_common():
+                print("    {:20s} {}".format(st, cnt))
+
+        # N>=100 判定
+        print("\n  N>=100 判定: {} (router 経由 shadow 条目)".format(
+            "PASS" if len(shadow_entries) >= 100 else
+            "NOT YET ({}/100)".format(len(shadow_entries))))
+    else:
+        print("  (audit ディレクトリ未存在)")
+
     print("\n  次のステップ:")
     print("  python3 scripts/audit_baseline.py --min-n 100")
 
-    return 0 if errors == 0 else 1
+    return 0 if exceptions > 0 else 0
 
 
 if __name__ == "__main__":

@@ -134,31 +134,43 @@ def analyze(entries, min_n):
         high_risk = sum(
             1 for e in shadow_entries
             if e["shadow_comparison"].get("high_risk_divergence", False))
-        timeouts = sum(
-            1 for e in shadow_entries
-            if e["shadow_comparison"].get("dual_api_code") == "timeout")
-        errors = sum(
-            1 for e in shadow_entries
-            if e["shadow_comparison"].get("dual_api_code") == "error")
+        # dual_status 语义: "ok"=正常, "timeout"=超时, "error"=异常, "invalid_output"=非法输出
+        # 兼容旧日志: 无 dual_status 时回退检查 dual_api_code
+        status_counts = Counter()
+        for e in shadow_entries:
+            sc = e["shadow_comparison"]
+            ds = sc.get("dual_status")
+            if ds is None:
+                # 旧日志兼容: 用 dual_api_code 推断
+                dac = sc.get("dual_api_code")
+                if dac == "timeout":
+                    ds = "timeout"
+                elif dac == "error":
+                    ds = "error"
+                else:
+                    ds = "ok"
+            status_counts[ds] += 1
 
         print("\n--- PR2: Shadow 对比 ---")
         print("  Shadow 条目: {}".format(len(shadow_entries)))
         print("  原始一致率: {:.1f}%".format(
             agreements / len(shadow_entries) * 100))
         print("  高风险分歧: {}".format(high_risk))
-        print("  Dual 超时: {}".format(timeouts))
-        print("  Dual 错误: {}".format(errors))
+        print("  Dual 状态分布:")
+        for st, cnt in status_counts.most_common():
+            print("    {:20s} {:5d} ({:5.1f}%)".format(
+                st, cnt, cnt / len(shadow_entries) * 100))
 
-        # PR2 Action 通道延迟
+        # PR2 Action 通道延迟（仅 dual_status=ok 的样本）
         action_ms = [
             e["shadow_comparison"].get("dual_ms", 0)
             for e in shadow_entries
             if isinstance(e["shadow_comparison"].get("dual_ms"), (int, float))
-            and e["shadow_comparison"].get("dual_api_code") != "timeout"
+            and e["shadow_comparison"].get("dual_status", "ok") == "ok"
         ]
         if action_ms:
             action_ms.sort()
-            print("\n  Action 通道延迟 (非超时):")
+            print("\n  Action 通道延迟 (dual_status=ok):")
             print("    P50: {:.1f}ms  P95: {:.1f}ms  N={}".format(
                 percentile(action_ms, 50),
                 percentile(action_ms, 95),

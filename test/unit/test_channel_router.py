@@ -337,7 +337,7 @@ class TestShadowRoute:
             loop.close()
 
     def test_shadow_timeout_recorded(self):
-        """Shadow: dual 超时 → dual_api_code='timeout'（Invariant 4）"""
+        """Shadow: wait_for 超时 → dual_status='timeout'（Invariant 4）"""
         brain = _make_brain()
         router = ChannelRouter(brain, RouterMode.SHADOW)
 
@@ -360,14 +360,15 @@ class TestShadowRoute:
                 try:
                     dual_result = await asyncio.wait_for(
                         asyncio.shield(dual_task), timeout=0.1)
-                    return {"raw_agreement": True}
+                    return {"dual_status": "ok", "raw_agreement": True}
                 except asyncio.TimeoutError:
                     if not dual_task.done():
                         dual_task.cancel()
                     return {
                         "legacy_api_code": legacy_result.api_code,
-                        "dual_api_code": "timeout",
+                        "dual_api_code": None,
                         "dual_sequence": None,
+                        "dual_status": "timeout",
                         "raw_agreement": False,
                         "high_risk_divergence": False,
                         "legacy_ms": 0, "dual_ms": 100,
@@ -376,28 +377,24 @@ class TestShadowRoute:
             router._build_shadow_comparison = fast_shadow
             result = loop.run_until_complete(router.route("test"))
             sc = result.shadow_comparison
-            assert sc["dual_api_code"] == "timeout"
+            assert sc["dual_status"] == "timeout"
             assert sc["raw_agreement"] is False
         finally:
             loop.close()
 
     def test_shadow_action_channel_internal_timeout_encoded(self):
-        """Finding #1: action channel 内部超时(raw=None) → dual_api_code='timeout'
+        """action channel 内部超时(raw=None) → dual_status='timeout'
 
         当 _call_ollama_v2 返回 None（Ollama 自身超时）且 allow_fallback=False 时，
-        _action_channel 返回 raw_llm_output="timeout/error"。
-        _build_shadow_comparison 应识别此哨兵值，编码 dual_api_code="timeout"，
-        而非 None（否则与 conversational a=null 混淆）。
+        _action_channel 返回 _action_status="timeout"。
+        _build_shadow_comparison 应读取 _action_status，编码 dual_status="timeout"。
         """
         brain = _make_brain()
         router = ChannelRouter(brain, RouterMode.SHADOW)
 
-        call_count = [0]
-
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            call_count[0] += 1
             if model == "claudia-action-v1":
-                return None  # Ollama 内部超时，返回 None
+                return None  # Ollama 内部超时
             else:
                 return {"r": "座ります", "a": 1009}
 
@@ -409,11 +406,63 @@ class TestShadowRoute:
             result = loop.run_until_complete(router.route("座って"))
             sc = result.shadow_comparison
             assert sc is not None, "shadow_comparison 应存在"
-            # 关键断言: 内部超时编码为 "timeout"，不是 None
-            assert sc["dual_api_code"] == "timeout", \
-                "action channel 内部超时应编码为 'timeout', got: {}".format(
-                    sc["dual_api_code"])
+            assert sc["dual_status"] == "timeout", \
+                "action channel 内部超时: dual_status='timeout', got: {}".format(
+                    sc["dual_status"])
             assert sc["raw_agreement"] is False
+        finally:
+            loop.close()
+
+    def test_shadow_invalid_output_encoded(self):
+        """action channel 非法 api_code → dual_status='invalid_output'
+
+        Finding #2: 模型输出非法 api_code 时，shadow 应记录 dual_status="invalid_output"，
+        而不是将清零后的 None 与正常 a=null 混淆。
+        """
+        brain = _make_brain()
+        router = ChannelRouter(brain, RouterMode.SHADOW)
+
+        async def mock_ollama(model, command, timeout=10, **kwargs):
+            if model == "claudia-action-v1":
+                return {"a": 9999}  # 非法 api_code
+            else:
+                return {"r": "やります", "a": None}
+
+        brain._call_ollama_v2 = mock_ollama
+        brain._sanitize_response = lambda x: x
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(router.route("何かして"))
+            sc = result.shadow_comparison
+            assert sc is not None
+            assert sc["dual_status"] == "invalid_output", \
+                "非法 api_code: dual_status='invalid_output', got: {}".format(
+                    sc["dual_status"])
+            assert sc["raw_agreement"] is False
+        finally:
+            loop.close()
+
+    def test_shadow_ok_status_on_normal_response(self):
+        """正常 action channel 返回 → dual_status='ok'"""
+        brain = _make_brain()
+        router = ChannelRouter(brain, RouterMode.SHADOW)
+
+        async def mock_ollama(model, command, timeout=10, **kwargs):
+            if model == "claudia-action-v1":
+                return {"a": 1009}  # 合法
+            else:
+                return {"r": "座ります", "a": 1009}
+
+        brain._call_ollama_v2 = mock_ollama
+        brain._sanitize_response = lambda x: x
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(router.route("座って"))
+            sc = result.shadow_comparison
+            assert sc is not None
+            assert sc["dual_status"] == "ok"
         finally:
             loop.close()
 
