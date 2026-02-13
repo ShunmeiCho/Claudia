@@ -19,6 +19,7 @@ import os
 import sys
 import asyncio
 import time
+import json
 import argparse
 from datetime import datetime
 
@@ -238,6 +239,12 @@ def create_brain(hardware=False):
         )
         brain.state_monitor = mock_monitor
 
+    # Shadow 模式下单 GPU 模型切换 ~30-45s/命令
+    # 默认 snapshot_max_age=5s 会导致大量假 stale-state 安全降级
+    # 放宽至 90s（仍比真实硬件故障阈值安全）
+    if hasattr(brain, 'safety_compiler') and brain.safety_compiler:
+        brain.safety_compiler.snapshot_max_age = 90.0
+
     return brain
 
 
@@ -247,6 +254,57 @@ def run_async(coro):
         return loop.run_until_complete(coro)
     finally:
         loop.close()
+
+
+def warmup_models(brain, router_mode="shadow"):
+    """モデルを VRAM にプリロード（冷启动による首条コマンドのレイテンシー汚染を防止）
+
+    Shadow モードでは Action → 7B の順で予熱。
+    最後にロードしたモデルが VRAM に残るため、
+    主路径の 7B を最後に予熱してヒット率を最大化。
+    """
+    try:
+        import subprocess
+    except ImportError:
+        print("  (subprocess 不可用，予熱スキップ)")
+        return
+
+    models = []
+    if router_mode == "shadow":
+        # Shadow: Action(観測用) → 7B(主路径=最後)
+        action_model = getattr(brain, '_channel_router', None)
+        if action_model:
+            action_model = action_model._action_model
+        else:
+            action_model = os.environ.get("BRAIN_MODEL_ACTION", "claudia-action-v1")
+        models = [
+            (action_model, 1024, "Action"),
+            (brain.model_7b, 2048, "7B"),
+        ]
+    else:
+        models = [(brain.model_7b, 2048, "7B")]
+
+    for model_name, num_ctx, label in models:
+        t0 = time.monotonic()
+        print("  予熱: {} ({})...".format(label, model_name), end="", flush=True)
+        try:
+            result = subprocess.run(
+                ["ollama", "run", model_name, '{"a":null}'],
+                capture_output=True, text=True, timeout=60,
+            )
+            elapsed = (time.monotonic() - t0) * 1000
+            if result.returncode == 0:
+                print(" OK ({:.0f}ms)".format(elapsed))
+            else:
+                print(" WARN: returncode={} ({:.0f}ms)".format(
+                    result.returncode, elapsed))
+        except subprocess.TimeoutExpired:
+            elapsed = (time.monotonic() - t0) * 1000
+            print(" TIMEOUT ({:.0f}ms), 続行".format(elapsed))
+        except Exception as e:
+            print(" ERROR: {}, 続行".format(e))
+
+    print()
 
 
 def run_observation(brain, commands, delay=3.0):
@@ -316,8 +374,13 @@ def main():
     for cat, count in sorted(cats.items()):
         print("    {:25s} {}".format(cat, count))
     print("  ※ 実際の router 経由数は実行後の audit ログで確定".format())
-    print("  推定時間: {:.0f}分 (delay={}s)".format(
-        len(COMMANDS) * args.delay / 60, args.delay))
+    # Shadow 単 GPU: ~45s/LLM 命令（VRAM swap x2）+ delay
+    # Hot cache: ~0.5s/命令 + delay
+    hot_count_all = sum(1 for _, c, _ in COMMANDS if c == "hot_cache")
+    llm_count_all = len(COMMANDS) - hot_count_all
+    est_min = (hot_count_all * (0.5 + args.delay) + llm_count_all * (45 + args.delay)) / 60
+    print("  推定時間: {:.0f}分 (hot={}, llm={}, delay={}s)".format(
+        est_min, hot_count_all, llm_count_all, args.delay))
     print("  モード: {}".format("hardware" if args.hardware else "simulation"))
     print("  BRAIN_ROUTER_MODE: {}".format(
         os.environ.get("BRAIN_ROUTER_MODE", "(not set)")))
@@ -346,6 +409,11 @@ def main():
     # 実行
     print()
     brain = create_brain(hardware=args.hardware)
+
+    # 冷启動防止: 両モデルを VRAM にプリロード
+    router_mode = os.environ.get("BRAIN_ROUTER_MODE", "legacy")
+    warmup_models(brain, router_mode=router_mode)
+
     start_time = datetime.now()
     print("  開始: {}".format(start_time.strftime("%Y-%m-%d %H:%M:%S")))
     print()
