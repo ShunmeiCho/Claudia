@@ -12,7 +12,7 @@ if ollama list | grep -q "v12.2-complete"; then
     echo "✅ claudia-go2-7b:v12.2-complete 已存在"
 else
     echo "❌ 模型不存在，正在创建..."
-    ollama create claudia-go2-7b:v12.2-complete -f models/ClaudiaIntelligent_7B_v2.0.modelfile
+    ollama create claudia-go2-7b:v12.2-complete -f models/ClaudiaIntelligent_7B_v2.0
 fi
 echo ""
 

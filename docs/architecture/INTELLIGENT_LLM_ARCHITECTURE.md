@@ -42,7 +42,7 @@ CPU: 8-core ARM
 ollama pull qwen2.5:14b-instruct-q4_K_M
 
 # 2. 创建专用Modelfile（不含关键字，纯语义理解）
-cat > models/ClaudiaIntelligent_v2.0.modelfile <<'EOF'
+cat > models/ClaudiaIntelligent_v2.0 <<'EOF'
 FROM qwen2.5:14b-instruct-q4_K_M
 
 SYSTEM """あなたは四足ロボット犬Claudiaの知能システムです。
@@ -109,7 +109,7 @@ PARAMETER stop <|im_end|>
 EOF
 
 # 3. 创建模型
-ollama create claudia-intelligent:14b-v2.0 -f models/ClaudiaIntelligent_v2.0.modelfile
+ollama create claudia-intelligent:14b-v2.0 -f models/ClaudiaIntelligent_v2.0
 ```
 
 **优势**：

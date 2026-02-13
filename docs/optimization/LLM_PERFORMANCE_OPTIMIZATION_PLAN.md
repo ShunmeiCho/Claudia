@@ -94,7 +94,7 @@ scrape→{"r":"擦ります","a":1029}    # ✅ 正确日语
 **操作**:
 ```bash
 # 创建新的纯日语Modelfile
-cat > ClaudiaGo2_v11.3_Japanese.modelfile <<'EOF'
+cat > ClaudiaGo2_v11.3_Japanese <<'EOF'
 FROM claudia-go2-3b:v11.2
 
 SYSTEM """あなたはClaudiaという四足ロボット犬のAIです。
@@ -122,7 +122,7 @@ PARAMETER num_ctx 2048
 EOF
 
 # 创建新模型
-ollama create claudia-go2-3b:v11.3 -f ClaudiaGo2_v11.3_Japanese.modelfile
+ollama create claudia-go2-3b:v11.3 -f ClaudiaGo2_v11.3_Japanese
 ```
 
 **验证**:

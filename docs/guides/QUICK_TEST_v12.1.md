@@ -12,7 +12,7 @@ ollama list | grep v12.1-simple
 # 期望输出：claudia-go2-7b:v12.1-simple
 
 # 2. 如果不存在，创建模型
-ollama create claudia-go2-7b:v12.1-simple -f models/ClaudiaIntelligent_7B_v2.0.modelfile
+ollama create claudia-go2-7b:v12.1-simple -f models/ClaudiaIntelligent_7B_v2.0
 
 # 3. 确认ProductionBrain配置
 grep "v12.1-simple" src/claudia/brain/production_brain.py
@@ -208,7 +208,7 @@ $ ollama run claudia-go2-7b:v12.1-simple
 Error: model not found
 
 # 解决
-$ ollama create claudia-go2-7b:v12.1-simple -f models/ClaudiaIntelligent_7B_v2.0.modelfile
+$ ollama create claudia-go2-7b:v12.1-simple -f models/ClaudiaIntelligent_7B_v2.0
 ```
 
 ### 问题2: 仍然输出 "godee"/"pong"
@@ -223,12 +223,12 @@ $ echo "今日はいい天気ですね" | ollama run claudia-go2-7b:v12.1-simple
    ollama list | grep claudia
 
 2. 确认Modelfile已更新
-   grep "Rule 6" models/ClaudiaIntelligent_7B_v2.0.modelfile
-   grep "今日はいい天気ですね" models/ClaudiaIntelligent_7B_v2.0.modelfile
+   grep "Rule 6" models/ClaudiaIntelligent_7B_v2.0
+   grep "今日はいい天気ですね" models/ClaudiaIntelligent_7B_v2.0
 
 3. 重新创建模型
    ollama rm claudia-go2-7b:v12.1-simple
-   ollama create claudia-go2-7b:v12.1-simple -f models/ClaudiaIntelligent_7B_v2.0.modelfile
+   ollama create claudia-go2-7b:v12.1-simple -f models/ClaudiaIntelligent_7B_v2.0
 ```
 
 ### 问题3: ProductionBrain未使用v12.1
