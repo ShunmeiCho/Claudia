@@ -258,3 +258,36 @@ class TestActionModelApiCodes:
         assert not missing, (
             "ACTION_MODEL_API_CODES 中的码 {} 未出现在 modelfile 中。"
             "请更新 modelfile 或 registry。".format(missing))
+
+    def test_7b_modelfile_action_list_consistent(self):
+        """ClaudiaIntelligent 7B modelfile 动作列表与 VALID_API_CODES 一致
+
+        7B 模型可输出任何 VALID_API_CODES 中的码（含高风险）。
+        Modelfile 中不应包含参数化动作码（会被运行时过滤，浪费推理 token）。
+        """
+        import re
+        modelfile_path = os.path.join(
+            os.path.dirname(__file__), '..', '..', 'models',
+            'ClaudiaIntelligent_7B_v2.0')
+        with open(modelfile_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # 提取 SYSTEM 块中 "NNNN=" 格式的动作定义（排除 PARAMETER 行的值）
+        codes_in_file = set()
+        for match in re.finditer(r'(\d{4})=', content):
+            code = int(match.group(1))
+            if 1000 <= code <= 1099:
+                codes_in_file.add(code)
+
+        # Modelfile 中的码应是 VALID_API_CODES 的子集（不应含参数化动作）
+        unexpected = codes_in_file - VALID_API_CODES
+        assert not unexpected, (
+            "7B Modelfile 包含不在 VALID_API_CODES 中的码: {}。"
+            "参数化动作（1008/1015/1028 等）会被运行时过滤，不应出现在 modelfile 中。"
+            .format(unexpected))
+
+        # VALID_API_CODES 中的码应出现在 Modelfile 中（确保模型能学到所有合法动作）
+        missing = VALID_API_CODES - codes_in_file
+        assert not missing, (
+            "VALID_API_CODES 中的码 {} 未出现在 7B modelfile 中。"
+            "请更新 modelfile 使模型能学到这些动作。".format(missing))
