@@ -12,9 +12,10 @@ import os
 from datetime import datetime
 from typing import Optional
 
-# 添加项目路径
-sys.path.append('/home/m1ng/claudia')
-sys.path.append('/home/m1ng/claudia/src')
+# 添加项目路径（相对于脚本位置，避免硬编码绝对路径）
+_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(_PROJECT_ROOT)
+sys.path.append(os.path.join(_PROJECT_ROOT, 'src'))
 
 from claudia.brain.production_brain import ProductionBrain, BrainOutput
 
@@ -102,9 +103,11 @@ class ProductionCommander:
         发送一个极短的推理请求，触发 Ollama 将模型权重加载到显存。
 
         Dual/Shadow 模式时，同时预热 Action 模型（num_ctx=1024 匹配 _action_channel）。
-        注意: Jetson 8GB VRAM 只能容纳一个 4.7GB 模型，
-        第二个模型的预热会将第一个换出，但 Ollama 的调度器会按需重新加载。
-        目的是让两个模型都至少被加载过一次，减少首次推理的额外开销。
+        Jetson 8GB VRAM 只能容纳一个 ~4.7GB 模型，后加载的模型驻留显存。
+        预热顺序按模式优化，确保首条命令的主路径模型在显存中:
+          - Legacy: 只预热 7B
+          - Shadow: Action 先 → 7B 后（7B 是主路径，应驻留显存）
+          - Dual:   7B 先 → Action 后（Action channel 先执行，应驻留显存）
         """
         print("🔄 预热模型中...")
         try:
@@ -124,31 +127,40 @@ class ProductionCommander:
                 )
 
             loop = asyncio.get_event_loop()
+            router_mode = self.brain._router_mode.value
 
-            # 预热 7B 主模型（所有模式都用）
-            start = time.time()
-            await asyncio.wait_for(
-                loop.run_in_executor(None, _sync_warmup, model_name, 2048),
-                timeout=60,
-            )
-            elapsed = (time.time() - start) * 1000
-            print("✅ 模型就绪 ({}: {:.0f}ms)".format(model_name, elapsed))
-
-            # Dual/Shadow 模式: 预热 Action 模型
-            # 注意: 用 .value 字符串比较，避免跨模块 Enum 身份不匹配
-            # (production_brain 导入 claudia.brain.channel_router,
-            #  此处若导入 src.claudia.brain.channel_router 则为不同的 Enum 类)
-            if self.brain._router_mode.value != "legacy":
+            # 构建预热序列: (model, num_ctx, label)
+            # 最后预热的模型驻留 VRAM，应为该模式首条命令的主路径模型
+            warmup_sequence = []
+            if router_mode == "shadow":
+                # Shadow: legacy(7B) 是主路径 → 7B 最后预热
                 action_model = self.brain._channel_router._action_model
+                warmup_sequence = [
+                    (action_model, 1024, "Action"),
+                    (model_name, 2048, "7B"),
+                ]
+            elif router_mode == "dual":
+                # Dual: action channel 先执行 → Action 最后预热
+                action_model = self.brain._channel_router._action_model
+                warmup_sequence = [
+                    (model_name, 2048, "7B"),
+                    (action_model, 1024, "Action"),
+                ]
+            else:
+                # Legacy: 只有 7B
+                warmup_sequence = [
+                    (model_name, 2048, "7B"),
+                ]
+
+            for model, num_ctx, label in warmup_sequence:
                 start = time.time()
                 await asyncio.wait_for(
-                    loop.run_in_executor(
-                        None, _sync_warmup, action_model, 1024),
-                    timeout=30,
+                    loop.run_in_executor(None, _sync_warmup, model, num_ctx),
+                    timeout=60,
                 )
                 elapsed = (time.time() - start) * 1000
-                print("✅ Action 模型就绪 ({}: {:.0f}ms)".format(
-                    action_model, elapsed))
+                print("✅ {} 模型就绪 ({}: {:.0f}ms)".format(
+                    label, model, elapsed))
 
         except ImportError:
             print("⚠️ ollama 库不可用，跳过预热")
@@ -178,6 +190,7 @@ class ProductionCommander:
         wakeup_start = time.time()
         standup_code = None
         stretch_code = None
+        standup_confirmed = False  # 3104 后验确认结果（审计 success 语义用）
         try:
             # StandUp(1004)
             result = self.brain._rpc_call("StandUp")
@@ -186,8 +199,8 @@ class ProductionCommander:
                 print("⚠️ 起立失败 (code={}), 跳过伸懒腰".format(standup_code))
                 return
 
-            # 姿态跟踪: 仅在确认成功时更新（与 _execute_real 的 fail-safe 原则一致）
             if standup_code in (0, -1):
+                standup_confirmed = True
                 self.brain._update_posture_tracking(1004)
                 await asyncio.sleep(1.5)
             elif standup_code == 3104:
@@ -195,6 +208,7 @@ class ProductionCommander:
                 await asyncio.sleep(2.0)
                 standing_ok = await self.brain._verify_standing_after_unknown()
                 if standing_ok:
+                    standup_confirmed = True
                     self.brain._update_posture_tracking(1004)
                 else:
                     print("⚠️ 起立未确认 (3104), 跳过伸懒腰")
@@ -212,10 +226,17 @@ class ProductionCommander:
         except Exception as e:
             print("⚠️ 唤醒动画异常: {}，继续启动".format(e))
         finally:
-            self._log_wakeup_audit(standup_code, stretch_code, wakeup_start)
+            self._log_wakeup_audit(
+                standup_code, stretch_code, wakeup_start, standup_confirmed)
 
-    def _log_wakeup_audit(self, standup_code, stretch_code, start_time):
-        """记录唤醒动画的审计条目"""
+    def _log_wakeup_audit(self, standup_code, stretch_code, start_time,
+                          standup_confirmed=False):
+        """记录唤醒动画的审计条目
+
+        Args:
+            standup_confirmed: StandUp 是否最终确认成功
+                (code=0/-1 直接确认, code=3104 需 _verify_standing_after_unknown 后验)
+        """
         try:
             from claudia.brain.audit_logger import AuditEntry, get_audit_logger
             from claudia.brain.audit_routes import ROUTE_STARTUP
@@ -235,7 +256,7 @@ class ProductionCommander:
                 elapsed_ms=elapsed,
                 cache_hit=False,
                 route=ROUTE_STARTUP,
-                success=(standup_code in (0, -1)
+                success=(standup_confirmed
                          and (stretch_code is None
                               or stretch_code in (0, -1, 3104))),
             )

@@ -49,7 +49,7 @@ def _make_commander(use_real_hardware=True, sport_client=True, router_mode="lega
     cmd.brain.model_7b = "test-model"
 
     # router mode
-    from src.claudia.brain.channel_router import RouterMode
+    from claudia.brain.channel_router import RouterMode
     cmd.brain._router_mode = RouterMode(router_mode) if router_mode != "legacy" else RouterMode.LEGACY
     cmd.brain._channel_router = MagicMock()
     cmd.brain._channel_router._action_model = "test-action-model"
@@ -272,8 +272,8 @@ class TestActionModelWarmup:
 
         assert call_count == 1  # 只预热了 7B
 
-    def test_shadow_mode_warms_action_model(self):
-        """Shadow 模式预热 7B + Action 模型"""
+    def test_shadow_mode_warms_action_first_7b_last(self):
+        """Shadow 模式: Action 先预热 → 7B 后预热（7B 驻留显存，首条命令主路径）"""
         cmd = _make_commander(router_mode="shadow")
         warmed_models = []
 
@@ -285,5 +285,21 @@ class TestActionModelWarmup:
             _run(cmd._warmup_model())
 
         assert len(warmed_models) == 2
-        assert warmed_models[0] == "test-model"
-        assert warmed_models[1] == "test-action-model"
+        assert warmed_models[0] == "test-action-model"  # Action 先
+        assert warmed_models[1] == "test-model"          # 7B 后（驻留显存）
+
+    def test_dual_mode_warms_7b_first_action_last(self):
+        """Dual 模式: 7B 先预热 → Action 后预热（Action 驻留显存，首条命令主路径）"""
+        cmd = _make_commander(router_mode="dual")
+        warmed_models = []
+
+        def mock_chat(**kwargs):
+            warmed_models.append(kwargs.get('model'))
+            return {'message': {'content': '{}'}}
+
+        with patch.dict('sys.modules', {'ollama': MagicMock(chat=mock_chat)}):
+            _run(cmd._warmup_model())
+
+        assert len(warmed_models) == 2
+        assert warmed_models[0] == "test-model"          # 7B 先
+        assert warmed_models[1] == "test-action-model"   # Action 后（驻留显存）
