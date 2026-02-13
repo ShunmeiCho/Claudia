@@ -179,11 +179,12 @@ class ChannelRouter:
         action_result.response = self._generate_template_response(action_result)
         return action_result
 
-    async def _action_channel(self, command, request_id):
-        # type: (str, str) -> RouterResult
+    async def _action_channel(self, command, request_id, allow_fallback=True):
+        # type: (str, str, bool) -> RouterResult
         """Action 通道: 调用 action model，只输出 {a:N} 或 {s:[...]} 或 {a:null}
 
         Fix #4: 校验 api_code 和 sequence 合法性
+        allow_fallback: True=失败时回退 legacy（Dual 模式），False=直接返回失败结果（Shadow 观测用）
         """
         t0 = time.monotonic()
         raw = await self._brain._call_ollama_v2(
@@ -196,11 +197,23 @@ class ChannelRouter:
         latency = (time.monotonic() - t0) * 1000
 
         if raw is None:
-            # 解析/超时失败 → 回退 legacy
-            self._logger.warning("Action 通道超时/失败，回退 legacy")
-            fallback = await self._legacy_route(
-                command, request_id, route=ROUTE_ACTION_FALLBACK)
-            return fallback
+            if allow_fallback:
+                # Dual 模式: 解析/超时失败 → 回退 legacy
+                self._logger.warning("Action 通道超时/失败，回退 legacy")
+                fallback = await self._legacy_route(
+                    command, request_id, route=ROUTE_ACTION_FALLBACK)
+                return fallback
+            else:
+                # Shadow 观测: 不回退，直接记录失败（保持对照纯净性）
+                self._logger.warning("Action 通道超时/失败 (shadow 观测，不回退)")
+                return RouterResult(
+                    api_code=None, sequence=None,
+                    response="",
+                    route=ROUTE_ACTION_CHANNEL,
+                    action_latency_ms=latency,
+                    request_id=request_id,
+                    raw_llm_output="timeout/error",
+                )
 
         api_code = raw.get("a")
         sequence = raw.get("s")
@@ -215,44 +228,51 @@ class ChannelRouter:
         # --- 单动作校验 ---
         if api_code is not None and api_code not in VALID_API_CODES:
             self._logger.warning(
-                "Action 通道非法 api_code={}，回退 legacy".format(api_code))
-            fallback = await self._legacy_route(
-                command, request_id, route=ROUTE_ACTION_FALLBACK)
-            return fallback
+                "Action 通道非法 api_code={}".format(api_code))
+            if allow_fallback:
+                fallback = await self._legacy_route(
+                    command, request_id, route=ROUTE_ACTION_FALLBACK)
+                return fallback
+            # Shadow 观测: 记录非法结果，不回退
+            api_code = None
 
         # --- 序列校验（Fix #4）---
         if sequence is not None:
             if not isinstance(sequence, list) or len(sequence) == 0:
                 self._logger.warning(
-                    "Action 通道序列类型错误或为空，回退 legacy")
-                fallback = await self._legacy_route(
-                    command, request_id, route=ROUTE_ACTION_FALLBACK)
-                return fallback
+                    "Action 通道序列类型错误或为空")
+                if allow_fallback:
+                    fallback = await self._legacy_route(
+                        command, request_id, route=ROUTE_ACTION_FALLBACK)
+                    return fallback
+                sequence = None
+            else:
+                # 过滤: 保留合法码，记录非法项
+                valid_seq = [c for c in sequence
+                             if isinstance(c, int) and c in VALID_API_CODES]
+                invalid_items = [c for c in sequence
+                                 if not (isinstance(c, int) and c in VALID_API_CODES)]
+                if invalid_items:
+                    self._logger.warning(
+                        "Action 通道过滤非法序列项: {}".format(invalid_items))
 
-            # 过滤: 保留合法码，记录非法项
-            valid_seq = [c for c in sequence
-                         if isinstance(c, int) and c in VALID_API_CODES]
-            invalid_items = [c for c in sequence
-                             if not (isinstance(c, int) and c in VALID_API_CODES)]
-            if invalid_items:
-                self._logger.warning(
-                    "Action 通道过滤非法序列项: {}".format(invalid_items))
+                # 长度限制
+                if len(valid_seq) > MAX_SEQUENCE_LENGTH:
+                    self._logger.warning(
+                        "Action 通道序列过长 ({}), 截断至 {}".format(
+                            len(valid_seq), MAX_SEQUENCE_LENGTH))
+                    valid_seq = valid_seq[:MAX_SEQUENCE_LENGTH]
 
-            # 长度限制
-            if len(valid_seq) > MAX_SEQUENCE_LENGTH:
-                self._logger.warning(
-                    "Action 通道序列过长 ({}), 截断至 {}".format(
-                        len(valid_seq), MAX_SEQUENCE_LENGTH))
-                valid_seq = valid_seq[:MAX_SEQUENCE_LENGTH]
-
-            if not valid_seq:
-                # 全部非法 → 回退
-                self._logger.warning("Action 通道序列全部非法，回退 legacy")
-                fallback = await self._legacy_route(
-                    command, request_id, route=ROUTE_ACTION_FALLBACK)
-                return fallback
-
-            sequence = valid_seq
+                if not valid_seq:
+                    # 全部非法
+                    self._logger.warning("Action 通道序列全部非法")
+                    if allow_fallback:
+                        fallback = await self._legacy_route(
+                            command, request_id, route=ROUTE_ACTION_FALLBACK)
+                        return fallback
+                    sequence = None
+                else:
+                    sequence = valid_seq
 
         return RouterResult(
             api_code=api_code,
@@ -308,9 +328,9 @@ class ChannelRouter:
             self._legacy_route(command, request_id,
                                state_snapshot=state_snapshot,
                                start_time=start_time))
-        # 观测路径: Action 通道（有限超时）
+        # 观测路径: Action 通道（有限超时，不回退 legacy — 保持对照纯净性）
         dual_task = asyncio.ensure_future(
-            self._action_channel(command, request_id))
+            self._action_channel(command, request_id, allow_fallback=False))
 
         # 等待 legacy（主路径）
         legacy_result = await legacy_task
