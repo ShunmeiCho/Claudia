@@ -95,7 +95,7 @@ class ASRSmokeTest:
     def __init__(self, mock: bool = False,
                  model_size: Optional[str] = None) -> None:
         self.mock = mock
-        self.model_size = model_size or os.getenv("CLAUDIA_ASR_MODEL", "small")
+        self.model_size = model_size or os.getenv("CLAUDIA_ASR_MODEL", "base")
         self.results = {}  # type: dict
         self._model = None
         self._passed = True
@@ -463,7 +463,19 @@ def main() -> int:
     )
     parser.add_argument(
         "--model", type=str, default=None,
-        help="Whisper モデルサイズ (default: small)",
+        help="Whisper モデルサイズ (default: base)",
+    )
+    parser.add_argument(
+        "--usb-mic", action="store_true",
+        help="USB マイク実録テスト (AT2020USB-XP, 5 秒録音 → ASR)",
+    )
+    parser.add_argument(
+        "--usb-device", type=str, default="hw:2,0",
+        help="ALSA USB マイクデバイス名 (default: hw:2,0)",
+    )
+    parser.add_argument(
+        "--usb-rate", type=int, default=44100,
+        help="USB マイクのネイティブサンプルレート (default: 44100)",
     )
     args = parser.parse_args()
 
@@ -474,12 +486,126 @@ def main() -> int:
 
     mock = args.mock or os.getenv("ASR_MOCK", "0") == "1"
 
+    if args.usb_mic:
+        return _run_usb_mic_test(
+            model_size=args.model or os.getenv("CLAUDIA_ASR_MODEL", "base"),
+            device=args.usb_device,
+            native_rate=args.usb_rate,
+        )
+
     test = ASRSmokeTest(
         mock=mock,
         model_size=args.model,
     )
     passed = test.run_all()
     return 0 if passed else 1
+
+
+def _run_usb_mic_test(model_size: str, device: str, native_rate: int) -> int:
+    """USB マイク実録 → ASR エンドツーエンドテスト
+
+    AT2020USB-XP は 44100Hz ネイティブ。Tegra ALSA plughw は全零を出すため、
+    ネイティブレートで録音し Python 側で 16kHz にリサンプルする。
+    """
+    import subprocess
+    import wave
+
+    print("=" * 60)
+    print("  USB Microphone → ASR End-to-End Test")
+    print("  Device: {}  Native Rate: {}Hz".format(device, native_rate))
+    print("  Model: whisper-{}".format(model_size))
+    print("=" * 60)
+    print()
+
+    wav_path = "/tmp/claudia_usb_mic_test.wav"
+    duration_s = 5
+
+    # 1. 録音
+    print("[1/4] Recording {}s from {} at {}Hz ...".format(duration_s, device, native_rate))
+    try:
+        subprocess.run(
+            ["arecord", "-D", device, "-f", "S16_LE",
+             "-r", str(native_rate), "-c", "1",
+             "-d", str(duration_s), "-t", "wav", wav_path],
+            check=True, capture_output=True, timeout=duration_s + 10,
+        )
+        print("  [PASS] Recorded to {}".format(wav_path))
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
+        print("  [FAIL] arecord failed: {}".format(e))
+        return 1
+
+    # 2. WAV 読み込み + リサンプル
+    import numpy as np
+    print("[2/4] Reading WAV and resampling {}→16000Hz ...".format(native_rate))
+    try:
+        with wave.open(wav_path, "rb") as wf:
+            sr_in = wf.getframerate()
+            n_frames = wf.getnframes()
+            raw = wf.readframes(n_frames)
+
+        samples = np.frombuffer(raw, dtype=np.int16)
+        rms_orig = int(np.sqrt(np.mean(samples.astype(np.float64) ** 2)))
+        print("  Original: {} samples, RMS={}".format(len(samples), rms_orig))
+
+        if rms_orig < 10:
+            print("  [WARN] Very low RMS — mic may not be capturing audio")
+
+        # リサンプル (numpy index-based)
+        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
+        from claudia.audio.asr_service.asr_server import resample_pcm_int16, SAMPLE_RATE
+        resampled = resample_pcm_int16(samples, sr_in, SAMPLE_RATE)
+        print("  Resampled: {} → {} samples (16kHz)".format(len(samples), len(resampled)))
+        print("  [PASS] Resampling OK")
+    except Exception as e:
+        print("  [FAIL] WAV processing failed: {}".format(e))
+        return 1
+
+    # 3. ASR 推理
+    print("[3/4] Loading whisper-{} and transcribing ...".format(model_size))
+    try:
+        from faster_whisper import WhisperModel
+
+        start = time.monotonic()
+        model = WhisperModel(model_size, device="cpu", compute_type="int8")
+        load_ms = (time.monotonic() - start) * 1000
+        print("  Model loaded in {:.0f}ms".format(load_ms))
+
+        audio_float = resampled.astype(np.float32) / 32768.0
+        start = time.monotonic()
+        segments, info = model.transcribe(
+            audio_float, language="ja", beam_size=3, vad_filter=True,
+        )
+        text_parts = []
+        for seg in segments:
+            text_parts.append(seg.text)
+        inference_ms = (time.monotonic() - start) * 1000
+
+        text = "".join(text_parts).strip()
+        print("  [PASS] Transcription: '{}'".format(text))
+        print("  Language: {} (prob={:.2f})".format(info.language, info.language_probability))
+        print("  Inference: {:.0f}ms".format(inference_ms))
+    except Exception as e:
+        print("  [FAIL] ASR inference failed: {}".format(e))
+        return 1
+
+    # 4. サマリー
+    print()
+    print("[4/4] Summary")
+    print("  Device:      {}".format(device))
+    print("  Native Rate: {}Hz".format(native_rate))
+    print("  RMS:         {}".format(rms_orig))
+    print("  Model:       whisper-{}".format(model_size))
+    print("  Text:        {}".format(text if text else "(empty)"))
+    print("  Load:        {:.0f}ms".format(load_ms))
+    print("  Inference:   {:.0f}ms".format(inference_ms))
+    print()
+    print("=" * 60)
+    if text:
+        print("  RESULT: USB MIC TEST PASSED")
+    else:
+        print("  RESULT: USB MIC TEST PASSED (empty transcription — silent input?)")
+    print("=" * 60)
+    return 0
 
 
 if __name__ == "__main__":

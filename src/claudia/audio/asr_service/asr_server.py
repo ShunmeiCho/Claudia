@@ -40,10 +40,43 @@ HEARTBEAT_INTERVAL_S = 5
 TTS_GATE_TIMEOUT_S = 30
 PROTO_VERSION = "1.0"
 
-# PCM 参数: 16kHz, 16-bit, mono
+# PCM 参数: 16kHz, 16-bit, mono (内部处理标准)
 SAMPLE_RATE = 16000
 FRAME_MS = 30
 FRAME_BYTES = FRAME_MS * BYTES_PER_MS  # 960 bytes = 30ms
+
+
+# ======================================================================
+# 音频重采样工具
+# ======================================================================
+
+def resample_pcm_int16(samples_int16, src_rate: int, dst_rate: int):
+    """PCM int16 重采样 (numpy 线性索引)
+
+    Tegra ALSA plughw 在 AT2020USB-XP 等 USB 麦克风上重采样会产出全零，
+    必须在 Python 层做。
+
+    Parameters
+    ----------
+    samples_int16 : np.ndarray (int16)
+        源采样率的 int16 PCM 样本
+    src_rate : int
+        源采样率 (如 44100)
+    dst_rate : int
+        目标采样率 (如 16000)
+
+    Returns
+    -------
+    np.ndarray (int16)
+        重采样后的 int16 PCM
+    """
+    if src_rate == dst_rate:
+        return samples_int16
+    import numpy as np
+    n_out = int(len(samples_int16) * dst_rate / src_rate)
+    indices = (np.arange(n_out, dtype=np.float64) * src_rate / dst_rate).astype(np.int64)
+    indices = np.clip(indices, 0, len(samples_int16) - 1)
+    return samples_int16[indices]
 
 
 # ======================================================================
@@ -57,7 +90,7 @@ class ASRModelWrapper:
     使用 CTranslate2 backend，不依赖 PyTorch 做推理。
 
     环境变量:
-    - CLAUDIA_ASR_MODEL: whisper 模型名 (tiny/base/small/medium/large-v3)，默认 small
+    - CLAUDIA_ASR_MODEL: whisper 模型名 (tiny/base/small/medium/large-v3)，默认 base
     - CLAUDIA_ASR_DEVICE: cpu 或 cuda (默认 cpu)
     - CLAUDIA_ASR_COMPUTE_TYPE: int8/float16/float32 (默认 int8)
     """
@@ -110,13 +143,18 @@ class ASRModelWrapper:
             self._mock = True
             self._ram_mb = 0
 
-    def transcribe(self, audio_data: bytes) -> Tuple[str, float]:
+    def transcribe(self, audio_data: bytes,
+                   sample_rate: int = SAMPLE_RATE) -> Tuple[str, float]:
         """完整语音段 ASR 转写
 
         Parameters
         ----------
         audio_data : bytes
-            16kHz 16-bit mono PCM
+            16-bit mono PCM (任意采样率，非 16kHz 时自动重采样)
+        sample_rate : int
+            输入音频采样率 (默认 16000)。USB 麦克风如 AT2020USB-XP
+            原生 44100Hz，ALSA plughw 在 Tegra 上重采样产出全零，
+            须传入原始 44100Hz 数据由此方法重采样。
 
         Returns
         -------
@@ -128,7 +166,10 @@ class ASRModelWrapper:
         try:
             import numpy as np
 
-            audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
+            audio_int16 = np.frombuffer(audio_data, dtype=np.int16)
+            if sample_rate != SAMPLE_RATE:
+                audio_int16 = resample_pcm_int16(audio_int16, sample_rate, SAMPLE_RATE)
+            audio_np = audio_int16.astype(np.float32) / 32768.0
 
             segments, info = self._model.transcribe(
                 audio_np,
@@ -160,10 +201,18 @@ class ASRModelWrapper:
             logger.error("ASR 推理失败: %s", e)
             return ("", 0.0)
 
-    def quick_transcribe(self, audio_data: bytes) -> Tuple[str, float]:
+    def quick_transcribe(self, audio_data: bytes,
+                         sample_rate: int = SAMPLE_RATE) -> Tuple[str, float]:
         """短片段快速转写（Emergency 快速器用）
 
         beam_size=1 + best_of=1 以最大化速度。
+
+        Parameters
+        ----------
+        audio_data : bytes
+            16-bit mono PCM (任意采样率)
+        sample_rate : int
+            输入音频采样率 (默认 16000)
         """
         if self._mock:
             return ("mock転写結果", 0.99)
@@ -171,7 +220,10 @@ class ASRModelWrapper:
         try:
             import numpy as np
 
-            audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
+            audio_int16 = np.frombuffer(audio_data, dtype=np.int16)
+            if sample_rate != SAMPLE_RATE:
+                audio_int16 = resample_pcm_int16(audio_int16, sample_rate, SAMPLE_RATE)
+            audio_np = audio_int16.astype(np.float32) / 32768.0
 
             segments, info = self._model.transcribe(
                 audio_np,

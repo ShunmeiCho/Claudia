@@ -60,6 +60,12 @@ pip3 install --user --quiet silero-vad
 log_info "  Installing numpy, soundfile..."
 pip3 install --user --quiet numpy soundfile
 
+# 2d. onnxruntime (silero-vad dependency) — pin to 1.18.1
+# onnxruntime >= 1.19 crashes on Jetson Orin NX with SIGABRT in CPU topology
+# detection (8 CPUs, only 0-3 online → stl_vector assertion failure)
+log_info "  Installing onnxruntime==1.18.1 (Jetson-safe version)..."
+pip3 install --user --quiet onnxruntime==1.18.1
+
 log_ok "All dependencies installed"
 
 # ---------------------------------------------------------------------------
@@ -100,7 +106,7 @@ fi
 # ---------------------------------------------------------------------------
 # Step 4: Download Whisper model to local cache
 # ---------------------------------------------------------------------------
-ASR_MODEL_SIZE="${CLAUDIA_ASR_MODEL:-small}"
+ASR_MODEL_SIZE="${CLAUDIA_ASR_MODEL:-base}"
 log_info "Step 4/5: Downloading Whisper model ($ASR_MODEL_SIZE) to local cache..."
 
 if python3 -c "
@@ -143,11 +149,16 @@ echo "Python:     $(python3 --version)"
 echo "Device:     CPU (INT8 quantization)"
 echo ""
 echo "Environment variables (optional):"
-echo "  CLAUDIA_ASR_MODEL=small|medium|large-v3  (default: small)"
-echo "  CLAUDIA_ASR_DEVICE=cpu|cuda               (default: cpu)"
-echo "  CLAUDIA_ASR_COMPUTE_TYPE=int8|float16      (default: int8)"
+echo "  CLAUDIA_ASR_MODEL=base|small|medium|large-v3  (default: base)"
+echo "  CLAUDIA_ASR_DEVICE=cpu|cuda                    (default: cpu)"
+echo "  CLAUDIA_ASR_COMPUTE_TYPE=int8|float16           (default: int8)"
+echo ""
+echo "USB Microphone notes (AT2020USB-XP):"
+echo "  - Native sample rate: 44100Hz (ALSA plughw resampling broken on Tegra)"
+echo "  - Record at hw:2,0 native rate, resample to 16kHz in Python"
+echo "  - ASRModelWrapper.transcribe() accepts sample_rate parameter"
 echo ""
 echo "Next steps:"
-echo "  1. Run Phase 0 mic test: python3 scripts/validation/audio/go2_mic_ssh_test.py"
-echo "  2. Run ASR smoke test:   python3 scripts/validation/audio/asr_inference_test.py"
+echo "  1. Run ASR smoke test: python3 scripts/validation/audio/asr_inference_test.py"
+echo "  2. Test with USB mic:  python3 scripts/validation/audio/asr_inference_test.py --usb-mic"
 echo ""
