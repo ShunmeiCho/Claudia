@@ -329,9 +329,9 @@ class TestStandingPrerequisite:
     def test_non_standing_action_no_prepend(self):
         """不需要站立的动作 → 不前插"""
         sc = make_compiler()
-        assert 1021 not in REQUIRE_STANDING  # Wallow 不需站立
-        v = sc.compile([1021], battery_level=0.80, is_standing=False)
-        assert v.executable_sequence == [1021]
+        assert 1005 not in REQUIRE_STANDING  # StandDown 不需站立
+        v = sc.compile([1005], battery_level=0.80, is_standing=False)
+        assert v.executable_sequence == [1005]
         assert not v.auto_prepend
 
     def test_sequence_single_prepend(self):

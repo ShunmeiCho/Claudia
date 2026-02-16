@@ -103,7 +103,7 @@ class ProductionCommander:
         发送一个极短的推理请求，触发 Ollama 将模型权重加载到显存。
 
         Dual/Shadow 模式时，同时预热 Action 模型（num_ctx=1024 匹配 _action_channel）。
-        Jetson 8GB VRAM 只能容纳一个 ~4.7GB 模型，后加载的模型驻留显存。
+        Jetson 16GB 统一内存，系统占 ~5.4GB，剩余 ~10GB 只够一个 ~5.6GB 模型常驻。
         预热顺序按模式优化，确保首条命令的主路径模型在显存中:
           - Legacy: 只预热 7B
           - Shadow: Action 先 → 7B 后（7B 是主路径，应驻留显存）

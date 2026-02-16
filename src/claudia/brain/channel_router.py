@@ -116,13 +116,14 @@ class ChannelRouter:
 
     async def _legacy_route(self, command, request_id,
                             state_snapshot=None, start_time=None,
-                            route=ROUTE_LLM_7B, ollama_timeout=25):
+                            route=ROUTE_LLM_7B, ollama_timeout=30):
         # type: (str, str, Any, Optional[float], str, int) -> RouterResult
         """Legacy 模式: 调用现有 7B 模型，返回 RouterResult
 
         透传: 行为与 PR1 完全一致，只是包装为 RouterResult。
-        ollama_timeout: Ollama 调用超时（Legacy/Dual=25s，Shadow=45s 含 VRAM 换入）
+        ollama_timeout: Ollama 调用超时（Legacy/Dual=30s，Shadow=45s 含 VRAM 换入）
         """
+        await self._brain._ensure_model_loaded(self._brain.model_7b, num_ctx=2048)
         t0 = time.monotonic()
         result = await self._brain._call_ollama_v2(
             self._brain.model_7b,
@@ -163,21 +164,23 @@ class ChannelRouter:
     async def _dual_route(self, command, request_id,
                           state_snapshot=None, start_time=None):
         # type: (str, str, Any, Optional[float]) -> RouterResult
-        """Dual 模式: Action 通道决策 → a=null 时回退 Voice"""
+        """Dual 模式: Action 通道决策，模板回复（不依赖 7B 模型）
+
+        a=null → 使用 brain._generate_conversational_response() 模板回复
+        有动作 → 使用 ACTION_RESPONSES 模板回复
+        全程只用 Action 模型，无需 7B 在 VRAM 中。
+        """
         # Step 1: Action 通道（短 prompt，~30 tokens）
         action_result = await self._action_channel(command, request_id)
 
-        # Step 2: a=null → 需要完整文本响应（Invariant 2）
-        # Fix #3: 如果 _action_channel 已经 fallback 到 legacy（route=ACTION_FALLBACK），
-        # 直接返回该 legacy 结果，不再重复调用 _voice_fallback()
+        # Step 2: a=null → 模板对话回复（无需调用 7B）
         if not action_result.has_action:
             if action_result.route == ROUTE_ACTION_FALLBACK:
-                # 已经走过 legacy 了，直接返回（避免双重 LLM 调用）
                 return action_result
-            voice_result = await self._voice_fallback(command, request_id,
-                                                      state_snapshot=state_snapshot,
-                                                      start_time=start_time)
-            return voice_result
+            # 使用 brain 的对话模板生成器（关键词匹配，不调用 LLM）
+            action_result.response = self._brain._generate_conversational_response(command)
+            action_result.route = ROUTE_VOICE_CHANNEL
+            return action_result
 
         # Step 3: 有动作 → 使用模板响应（不需要 LLM 生成文本）
         action_result.response = self._generate_template_response(action_result)
@@ -192,6 +195,7 @@ class ChannelRouter:
         allow_fallback: True=失败时回退 legacy（Dual 模式），False=直接返回失败结果（Shadow 观测用）
         ollama_timeout: Ollama 调用超时（Dual=5s 紧凑，Shadow=15s 含 VRAM 换入）
         """
+        await self._brain._ensure_model_loaded(self._action_model, num_ctx=1024)
         t0 = time.monotonic()
         raw = await self._brain._call_ollama_v2(
             model=self._action_model,
@@ -205,11 +209,9 @@ class ChannelRouter:
 
         if raw is None:
             if allow_fallback:
-                # Dual 模式: 解析/超时失败 → 回退 legacy
-                self._logger.warning("Action 通道超时/失败，回退 legacy")
-                fallback = await self._legacy_route(
-                    command, request_id, route=ROUTE_ACTION_FALLBACK)
-                return fallback
+                # Dual 模式: 超时/失败 → 模板回复（不调用 7B）
+                self._logger.warning("Action 通道超時/失敗，模板回復")
+                return self._template_fallback(command, request_id, latency)
             else:
                 # Shadow 观测: 不回退，直接记录失败（保持对照纯净性）
                 self._logger.warning("Action 通道超时/失败 (shadow 观测，不回退)")
@@ -241,9 +243,7 @@ class ChannelRouter:
             self._logger.warning(
                 "Action 通道非法 api_code={}".format(api_code))
             if allow_fallback:
-                fallback = await self._legacy_route(
-                    command, request_id, route=ROUTE_ACTION_FALLBACK)
-                return fallback
+                return self._template_fallback(command, request_id, latency)
             # Shadow 观测: 记录非法结果，不回退
             api_code = None
             action_status = "invalid_output"
@@ -254,9 +254,7 @@ class ChannelRouter:
                 self._logger.warning(
                     "Action 通道序列类型错误或为空")
                 if allow_fallback:
-                    fallback = await self._legacy_route(
-                        command, request_id, route=ROUTE_ACTION_FALLBACK)
-                    return fallback
+                    return self._template_fallback(command, request_id, latency)
                 sequence = None
                 action_status = "invalid_output"
             else:
@@ -280,9 +278,7 @@ class ChannelRouter:
                     # 全部非法
                     self._logger.warning("Action 通道序列全部非法")
                     if allow_fallback:
-                        fallback = await self._legacy_route(
-                            command, request_id, route=ROUTE_ACTION_FALLBACK)
-                        return fallback
+                        return self._template_fallback(command, request_id, latency)
                     sequence = None
                     action_status = "invalid_output"
                 else:
@@ -322,6 +318,23 @@ class ChannelRouter:
         elif result.sequence:
             return get_response_for_sequence(result.sequence)
         return ""
+
+    def _template_fallback(self, command, request_id, latency):
+        # type: (str, str, float) -> RouterResult
+        """Action 通道失败时的模板回退（不调用 7B）
+
+        使用 brain._generate_conversational_response() 的关键词匹配生成回复，
+        零 LLM 推理开销，避免 VRAM 模型切换。
+        """
+        response = self._brain._generate_conversational_response(command)
+        return RouterResult(
+            api_code=None,
+            sequence=None,
+            response=response,
+            route=ROUTE_ACTION_FALLBACK,
+            action_latency_ms=latency,
+            request_id=request_id,
+        )
 
     # ------------------------------------------------------------------
     # Shadow: Legacy 为主，Action 顺序观测
