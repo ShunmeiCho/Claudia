@@ -40,7 +40,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from claudia.brain.action_registry import VALID_API_CODES, HIGH_ENERGY_ACTIONS
+from claudia.brain.action_registry import VALID_API_CODES, HIGH_ENERGY_ACTIONS, ACTION_SCHEMA
 
 # shadow_observation_commands.py のコマンドを直接インポート
 # ただし hot_cache を除外（LLM 対比の対象外）
@@ -66,12 +66,16 @@ MODEL_ACTION = os.environ.get("BRAIN_MODEL_ACTION", "claudia-action-v1")
 MODEL_7B = os.environ.get("BRAIN_MODEL_7B", "claudia-7b:v2.0")
 
 
-def call_ollama(model, command, num_predict=100, num_ctx=2048, timeout=60):
-    """Ollama に直接 JSON モード呼び出し（Python ollama ライブラリ使用）
+def call_ollama(model, command, num_predict=100, num_ctx=2048, timeout=60,
+                output_format='json'):
+    """Ollama に直接呼び出し（Python ollama ライブラリ使用）
 
     Returns:
         (parsed_dict, latency_ms, status)
         status: "ok" | "timeout" | "error" | "parse_error"
+
+    Args:
+        output_format: 'json' = 任意 JSON, dict = JSON Schema 結構化出力
     """
     try:
         import ollama as ollama_lib
@@ -83,7 +87,7 @@ def call_ollama(model, command, num_predict=100, num_ctx=2048, timeout=60):
         response = ollama_lib.chat(
             model=model,
             messages=[{'role': 'user', 'content': command}],
-            format='json',
+            format=output_format,
             options={
                 'temperature': 0.0,
                 'num_predict': num_predict,
@@ -256,10 +260,11 @@ def run_comparison(commands, output_path, timeout=60, delay=2.0):
             })
             continue
 
-        # Step 1: Action モデル（VRAM swap in）
+        # Step 1: Action モデル（VRAM swap in, ACTION_SCHEMA 構造化出力）
         action_raw, action_ms, action_status = call_ollama(
             MODEL_ACTION, cmd,
             num_predict=30, num_ctx=1024, timeout=timeout,
+            output_format=ACTION_SCHEMA,
         )
 
         # Step 2: 7B モデル（VRAM swap in → VRAM に残る）

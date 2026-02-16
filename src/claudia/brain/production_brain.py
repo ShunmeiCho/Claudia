@@ -167,15 +167,15 @@ class ProductionBrain:
             "さようなら": {"response": "さようなら！またね。", "api_code": 1016},
             "おやすみ": {"response": "おやすみなさい！", "api_code": 1016},
             "おやすみなさい": {"response": "おやすみなさい！", "api_code": 1016},
-            "good morning": {"response": "Good morning! 挨拶します", "api_code": 1016},
-            "good evening": {"response": "Good evening! 挨拶します", "api_code": 1016},
-            "good night": {"response": "Good night! 挨拶します", "api_code": 1016},
-            "goodbye": {"response": "Goodbye! またね。", "api_code": 1016},
-            "bye": {"response": "Goodbye! またね。", "api_code": 1016},
-            "早上好": {"response": "早上好！挨拶します", "api_code": 1016},
-            "晚上好": {"response": "晚上好！挨拶します", "api_code": 1016},
-            "晚安": {"response": "晚安！", "api_code": 1016},
-            "再见": {"response": "再见！またね。", "api_code": 1016},
+            "good morning": {"response": "おはようございます！挨拶します", "api_code": 1016},
+            "good evening": {"response": "こんばんは！挨拶します", "api_code": 1016},
+            "good night": {"response": "おやすみなさい！挨拶します", "api_code": 1016},
+            "goodbye": {"response": "さようなら！またね。", "api_code": 1016},
+            "bye": {"response": "さようなら！またね。", "api_code": 1016},
+            "早上好": {"response": "おはようございます！挨拶します", "api_code": 1016},
+            "晚上好": {"response": "こんばんは！挨拶します", "api_code": 1016},
+            "晚安": {"response": "おやすみなさい！", "api_code": 1016},
+            "再见": {"response": "さようなら！またね。", "api_code": 1016},
 
             # === 褒め言葉 → Heart(1036) ===
             "かわいい": {"response": "ありがとう！ハートします", "api_code": 1036},
@@ -986,8 +986,9 @@ class ProductionBrain:
             return False
 
     async def _call_ollama_v2(self, model, command, timeout=10,
-                              num_predict=100, num_ctx=2048):
-        # type: (str, str, int, int, int) -> Optional[Dict]
+                              num_predict=100, num_ctx=2048,
+                              output_format='json'):
+        # type: (str, str, int, int, int, Any) -> Optional[Dict]
         """调用 Ollama LLM 推理
 
         Args:
@@ -996,6 +997,8 @@ class ProductionBrain:
             timeout: 异步超时秒数
             num_predict: 最大生成 token 数（Action 通道传 30，Legacy 默认 100）
             num_ctx: 上下文窗口大小（Action 通道传 1024，Legacy 默认 2048）
+            output_format: 输出格式约束。'json' = 任意合法 JSON（7B 用），
+                          dict = JSON Schema 结构化输出（Action 通道用 ACTION_SCHEMA）
         """
         if not OLLAMA_AVAILABLE:
             self.logger.warning("ollama库不可用，使用旧方法")
@@ -1004,13 +1007,14 @@ class ProductionBrain:
         # 闭包捕获: 将参数绑定到局部变量供 _sync_ollama_call 使用
         _num_predict = num_predict
         _num_ctx = num_ctx
+        _output_format = output_format
 
         try:
             def _sync_ollama_call():
                 response = ollama.chat(
                     model=model,
                     messages=[{'role': 'user', 'content': command}],
-                    format='json',
+                    format=_output_format,
                     options={
                         'temperature': 0.0,
                         'num_predict': _num_predict,

@@ -30,7 +30,7 @@ from claudia.brain.audit_routes import (
     ROUTE_SHADOW, ROUTE_ACTION_FALLBACK,
 )
 from claudia.brain.action_registry import (
-    VALID_API_CODES, HIGH_ENERGY_ACTIONS,
+    VALID_API_CODES, HIGH_ENERGY_ACTIONS, ACTION_SCHEMA,
     get_response_for_action, get_response_for_sequence,
 )
 
@@ -199,6 +199,7 @@ class ChannelRouter:
             timeout=ollama_timeout,
             num_predict=30,     # ~30 tokens 足够输出 {"a":1009}
             num_ctx=1024,       # 缩小上下文窗口，降低推理开销
+            output_format=ACTION_SCHEMA,  # 结构化输出: 强制 {"a":N} | {"s":[...]}
         )
         latency = (time.monotonic() - t0) * 1000
 

@@ -756,7 +756,8 @@ class TestActionChannelTokenBudget:
         captured_kwargs = {}
 
         async def mock_ollama(model, command, timeout=10,
-                              num_predict=100, num_ctx=2048):
+                              num_predict=100, num_ctx=2048,
+                              output_format='json'):
             captured_kwargs['num_predict'] = num_predict
             captured_kwargs['num_ctx'] = num_ctx
             return {"a": 1009}
@@ -783,7 +784,8 @@ class TestActionChannelTokenBudget:
         captured_kwargs = {}
 
         async def mock_ollama(model, command, timeout=10,
-                              num_predict=100, num_ctx=2048):
+                              num_predict=100, num_ctx=2048,
+                              output_format='json'):
             captured_kwargs['num_predict'] = num_predict
             captured_kwargs['num_ctx'] = num_ctx
             return {"r": "座ります", "a": 1009}
@@ -815,7 +817,8 @@ class TestActionSequenceConflict:
         router = ChannelRouter(brain, RouterMode.DUAL)
 
         async def mock_ollama(model, command, timeout=10,
-                              num_predict=100, num_ctx=2048):
+                              num_predict=100, num_ctx=2048,
+                              output_format='json'):
             if model == "claudia-action-v1":
                 return {"a": 1009, "s": [1004, 1016]}  # 冲突!
             return {"r": "ok", "a": None}
@@ -840,7 +843,8 @@ class TestActionSequenceConflict:
         router = ChannelRouter(brain, RouterMode.DUAL)
 
         async def mock_ollama(model, command, timeout=10,
-                              num_predict=100, num_ctx=2048):
+                              num_predict=100, num_ctx=2048,
+                              output_format='json'):
             if model == "claudia-action-v1":
                 return {"a": 1009}
             return {"r": "ok", "a": None}
@@ -868,7 +872,8 @@ class TestNoDoubleLegacyCall:
         call_count = {"legacy": 0}
 
         async def mock_ollama(model, command, timeout=10,
-                              num_predict=100, num_ctx=2048):
+                              num_predict=100, num_ctx=2048,
+                              output_format='json'):
             if model == "claudia-action-v1":
                 return None  # action 模型失败
             else:
@@ -896,7 +901,8 @@ class TestNoDoubleLegacyCall:
         call_count = {"total": 0}
 
         async def mock_ollama(model, command, timeout=10,
-                              num_predict=100, num_ctx=2048):
+                              num_predict=100, num_ctx=2048,
+                              output_format='json'):
             call_count["total"] += 1
             if model == "claudia-action-v1":
                 return {"a": None}  # 正常: 无动作
@@ -922,7 +928,8 @@ class TestNoDoubleLegacyCall:
         call_count = {"legacy": 0}
 
         async def mock_ollama(model, command, timeout=10,
-                              num_predict=100, num_ctx=2048):
+                              num_predict=100, num_ctx=2048,
+                              output_format='json'):
             if model == "claudia-action-v1":
                 return None  # action 失败
             else:
