@@ -115,7 +115,9 @@ class ProductionBrain:
         import os
         self.model_7b = os.getenv("BRAIN_MODEL_7B", "claudia-7b:v2.0")
 
-        self.logger.info(f"🧠 📌 7B模型: {self.model_7b}")
+        _mode = os.getenv("BRAIN_ROUTER_MODE", "dual")
+        if _mode != "dual":
+            self.logger.info("🧠 7B模型: {}".format(self.model_7b))
         
         # 精简动作缓存（仅保留文化特定词和LLM容易出错的核心命令）
         self.hot_cache = {
@@ -1002,7 +1004,11 @@ class ProductionBrain:
         try:
             ps_result = ollama.ps()
             loaded_names = [m.model for m in (ps_result.models or [])]
-            if model in loaded_names:
+            # ollama.ps() 返回带 tag 的全名 (如 "model:latest")
+            # 传入的 model 可能不带 tag，需要用 base name 比较
+            loaded_base = [n.split(':')[0] for n in loaded_names]
+            model_base = model.split(':')[0]
+            if model in loaded_names or model_base in loaded_base:
                 return True  # 已在显存中
 
             # 模型不在显存 → 触发加载

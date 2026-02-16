@@ -86,7 +86,7 @@ class ChannelRouter:
         self._brain = brain
         self._mode = mode
         self._logger = brain.logger
-        self._action_model = os.getenv("BRAIN_MODEL_ACTION", "claudia-action-v1")
+        self._action_model = os.getenv("BRAIN_MODEL_ACTION", "claudia-action-v3")
 
     @property
     def mode(self):
