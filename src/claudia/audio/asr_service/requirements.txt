@@ -19,6 +19,12 @@ silero-vad
 numpy
 soundfile
 
+# ONNX Runtime (silero-vad dependency)
+# Pin to 1.18.1: onnxruntime >= 1.19 crashes on Jetson Orin NX (SIGABRT in CPU
+# topology detection — 8 CPUs but only 0-3 online, ORT tries affinity to offline
+# CPUs causing stl_vector::operator[] assertion failure)
+onnxruntime==1.18.1
+
 # Testing (dev only)
 pytest
 pytest-asyncio
