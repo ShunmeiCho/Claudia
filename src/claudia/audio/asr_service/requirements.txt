@@ -1,0 +1,31 @@
+# =============================================================================
+# Claudia ASR Service Dependencies
+# Python 3.11 venv, Jetson Orin NX (aarch64), CUDA 11.4
+#
+# Install: pip install -r requirements.txt --extra-index-url \
+#   https://developer.download.nvidia.com/compute/redist/jp/v50/pytorch/
+#
+# CRITICAL: onnxruntime >= 1.20.0 crashes on Jetson Orin NX with SIGABRT
+#           in CPU topology detection (8 CPUs, 4-7 offline).
+# =============================================================================
+
+# PyTorch (JetPack CUDA wheel via --extra-index-url)
+torch
+torchaudio
+
+# Qwen3-ASR-0.6B inference
+qwen-asr
+
+# Voice Activity Detection
+silero-vad
+
+# Audio processing
+numpy
+soundfile
+
+# ONNX Runtime - PINNED for Jetson compatibility
+onnxruntime==1.18.1
+
+# Testing (dev only)
+pytest
+pytest-asyncio
