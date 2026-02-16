@@ -1,18 +1,20 @@
 #!/bin/bash
-# v12.2-complete 优化验证脚本
+# 模型优化验证脚本
+# 注意: 1008(Move)/1015(SpeedLevel) 已从 VALID_API_CODES 中移除，
+# 这些测试项现在期望输出 a:null
 
 echo "=========================================="
-echo "v12.2-complete 优化验证"
+echo "7B 模型优化验证"
 echo "=========================================="
 echo ""
 
 # 1. 检查模型
-echo "1. 检查v12.2-complete模型..."
-if ollama list | grep -q "v12.2-complete"; then
-    echo "✅ claudia-go2-7b:v12.2-complete 已存在"
+echo "1. 检查模型..."
+if ollama list | grep -q "claudia-7b:v2.0"; then
+    echo "✅ claudia-7b:v2.0 已存在"
 else
     echo "❌ 模型不存在，正在创建..."
-    ollama create claudia-go2-7b:v12.2-complete -f models/ClaudiaIntelligent_7B_v2.0
+    ollama create claudia-7b:v2.0 -f models/ClaudiaIntelligent_7B_v2.0
 fi
 echo ""
 
@@ -21,15 +23,15 @@ echo "2. 测试新增运动控制API..."
 echo ""
 
 echo "测试: 歩いて (1008)..."
-echo "歩いて" | ollama run claudia-go2-7b:v12.2-complete 2>/dev/null | head -1
+echo "歩いて" | ollama run claudia-7b:v2.0 2>/dev/null | head -1
 echo ""
 
 echo "测试: 速く歩いて (1015)..."
-echo "速く歩いて" | ollama run claudia-go2-7b:v12.2-complete 2>/dev/null | head -1
+echo "速く歩いて" | ollama run claudia-7b:v2.0 2>/dev/null | head -1
 echo ""
 
 echo "测试: 前進して (1008)..."
-echo "前進して" | ollama run claudia-go2-7b:v12.2-complete 2>/dev/null | head -1
+echo "前進して" | ollama run claudia-7b:v2.0 2>/dev/null | head -1
 echo ""
 
 # 3. 验证核心功能未破坏
@@ -37,15 +39,15 @@ echo "3. 验证核心功能未破坏..."
 echo ""
 
 echo "测试: 座って..."
-echo "座って" | ollama run claudia-go2-7b:v12.2-complete 2>/dev/null | head -1
+echo "座って" | ollama run claudia-7b:v2.0 2>/dev/null | head -1
 echo ""
 
 echo "测试: 可愛いね (语义理解)..."
-echo "可愛いね" | ollama run claudia-go2-7b:v12.2-complete 2>/dev/null | head -1
+echo "可愛いね" | ollama run claudia-7b:v2.0 2>/dev/null | head -1
 echo ""
 
 echo "测试: 立ってそしてダンス (序列)..."
-echo "立ってそしてダンス" | ollama run claudia-go2-7b:v12.2-complete 2>/dev/null | head -1
+echo "立ってそしてダンス" | ollama run claudia-7b:v2.0 2>/dev/null | head -1
 echo ""
 
 # 4. 验证hot_cache精简（检查代码）

@@ -1,0 +1,30 @@
+# =============================================================================
+# Claudia ASR Service Dependencies
+# Python 3.8 (system), Jetson Orin NX (aarch64), CTranslate2 backend
+#
+# Install: pip3 install --user -r requirements.txt
+#
+# NOTE: faster-whisper uses CTranslate2, NOT PyTorch for inference.
+#       No CUDA PyTorch wheel needed. silero-vad still uses torch for CPU VAD.
+# =============================================================================
+
+# ASR inference (CTranslate2 backend, 4x faster than PyTorch Whisper)
+faster-whisper>=1.0.0
+
+# Voice Activity Detection (uses torch internally, CPU only)
+# torch is pulled as silero-vad dependency
+silero-vad
+
+# Audio processing
+numpy
+soundfile
+
+# ONNX Runtime (silero-vad dependency)
+# Pin to 1.18.1: onnxruntime >= 1.19 crashes on Jetson Orin NX (SIGABRT in CPU
+# topology detection — 8 CPUs but only 0-3 online, ORT tries affinity to offline
+# CPUs causing stl_vector::operator[] assertion failure)
+onnxruntime==1.18.1
+
+# Testing (dev only)
+pytest
+pytest-asyncio

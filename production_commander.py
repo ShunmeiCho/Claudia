@@ -40,7 +40,14 @@ class ProductionCommander:
         print("🤖 Claudia Production Commander - LLM大脑实机测试")
         print("="*60)
         print(f"⚙️  模式: {'真实硬件' if self.brain.use_real_hardware else '模拟执行'}")
-        print(f"🧠 模型: {self.brain.model_7b}")
+        router_mode = self.brain._router_mode.value
+        if router_mode == "dual":
+            action_model = self.brain._channel_router._action_model
+            print("🧠 モデル: {} (dual: Action-primary)".format(action_model))
+        elif router_mode == "shadow":
+            print("🧠 モデル: {} + Action (shadow)".format(self.brain.model_7b))
+        else:
+            print("🧠 モデル: {}".format(self.brain.model_7b))
         print(f"⏰ 会话开始: {self.session_start.strftime('%Y-%m-%d %H:%M:%S')}")
         print("-"*60)
         print("💡 提示: 输入日语/中文/英文命令，输入 /help 查看帮助")
@@ -103,18 +110,44 @@ class ProductionCommander:
         发送一个极短的推理请求，触发 Ollama 将模型权重加载到显存。
 
         Dual/Shadow 模式时，同时预热 Action 模型（num_ctx=1024 匹配 _action_channel）。
-        Jetson 8GB VRAM 只能容纳一个 ~4.7GB 模型，后加载的模型驻留显存。
+        Jetson 16GB 统一内存，系统占 ~5.4GB，剩余 ~10GB 只够一个 ~5.6GB 模型常驻。
         预热顺序按模式优化，确保首条命令的主路径模型在显存中:
           - Legacy: 只预热 7B
           - Shadow: Action 先 → 7B 后（7B 是主路径，应驻留显存）
           - Dual:   7B 先 → Action 后（Action channel 先执行，应驻留显存）
         """
         print("🔄 预热模型中...")
+        model_name = self.brain.model_7b
+
+        def _sync_warmup_http(model, num_ctx):
+            # 标准库兜底: 不依赖 Python ollama 包，直接走本地 Ollama HTTP API
+            from urllib.request import Request, urlopen
+            payload = json.dumps({
+                "model": model,
+                "prompt": "hi",
+                "stream": False,
+                "options": {
+                    "num_predict": 1,
+                    "num_ctx": num_ctx,
+                },
+                "keep_alive": "30m",
+            }).encode("utf-8")
+            req = Request(
+                "http://localhost:11434/api/generate",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(req, timeout=20) as resp:
+                resp.read()
+
+        use_ollama_py = False
+        sync_warmup_fn = _sync_warmup_http
         try:
             import ollama as _ollama
-            model_name = self.brain.model_7b
+            use_ollama_py = True
 
-            def _sync_warmup(model, num_ctx):
+            def _sync_warmup_ollama(model, num_ctx):
                 return _ollama.chat(
                     model=model,
                     messages=[{'role': 'user', 'content': 'hi'}],
@@ -126,51 +159,55 @@ class ProductionCommander:
                     keep_alive='30m',
                 )
 
-            loop = asyncio.get_event_loop()
-            router_mode = self.brain._router_mode.value
+            sync_warmup_fn = _sync_warmup_ollama
+        except ImportError:
+            print("ℹ️ 未检测到Python ollama包，使用HTTP API预热")
 
-            # 构建预热序列: (model, num_ctx, label, timeout_s)
-            # 最后预热的模型驻留 VRAM，应为该模式首条命令的主路径模型
-            # Action 模型 num_predict=30 推理轻量，30s 超时足够
-            warmup_sequence = []
-            if router_mode == "shadow":
-                # Shadow: legacy(7B) 是主路径 → 7B 最后预热
-                action_model = self.brain._channel_router._action_model
-                warmup_sequence = [
-                    (action_model, 1024, "Action", 30),
-                    (model_name, 2048, "7B", 60),
-                ]
-            elif router_mode == "dual":
-                # Dual: action channel 先执行 → Action 最后预热
-                action_model = self.brain._channel_router._action_model
-                warmup_sequence = [
-                    (model_name, 2048, "7B", 60),
-                    (action_model, 1024, "Action", 30),
-                ]
-            else:
-                # Legacy: 只有 7B
-                warmup_sequence = [
-                    (model_name, 2048, "7B", 60),
-                ]
+        loop = asyncio.get_event_loop()
+        router_mode = self.brain._router_mode.value
 
-            for model, num_ctx, label, timeout_s in warmup_sequence:
-                try:
-                    start = time.time()
-                    await asyncio.wait_for(
-                        loop.run_in_executor(None, _sync_warmup, model, num_ctx),
-                        timeout=timeout_s,
-                    )
-                    elapsed = (time.time() - start) * 1000
+        # 构建预热序列: (model, num_ctx, label, timeout_s)
+        # 最后预热的模型驻留 VRAM，应为该模式首条命令的主路径模型
+        # Action 模型 num_predict=30 推理轻量，30s 超时足够
+        warmup_sequence = []
+        if router_mode == "shadow":
+            # Shadow: legacy(7B) 是主路径 → 7B 最后预热
+            action_model = self.brain._channel_router._action_model
+            warmup_sequence = [
+                (action_model, 1024, "Action", 30),
+                (model_name, 2048, "7B", 60),
+            ]
+        elif router_mode == "dual":
+            # Dual (Action-primary): 只需 Action 模型，不预热 7B
+            action_model = self.brain._channel_router._action_model
+            warmup_sequence = [
+                (action_model, 1024, "Action", 30),
+            ]
+        else:
+            # Legacy: 只有 7B
+            warmup_sequence = [
+                (model_name, 2048, "7B", 60),
+            ]
+
+        for model, num_ctx, label, timeout_s in warmup_sequence:
+            try:
+                start = time.time()
+                await asyncio.wait_for(
+                    loop.run_in_executor(None, sync_warmup_fn, model, num_ctx),
+                    timeout=timeout_s,
+                )
+                elapsed = (time.time() - start) * 1000
+                if use_ollama_py:
                     print("✅ {} 模型就绪 ({}: {:.0f}ms)".format(
                         label, model, elapsed))
-                except asyncio.TimeoutError:
-                    print("⚠️ {} 模型预热超时 ({}s)，继续".format(
-                        label, timeout_s))
-                except Exception as e:
-                    print("⚠️ {} 模型预热失败: {}，继续".format(label, e))
-
-        except ImportError:
-            print("⚠️ ollama 库不可用，跳过预热")
+                else:
+                    print("✅ {} 模型就绪[HTTP] ({}: {:.0f}ms)".format(
+                        label, model, elapsed))
+            except asyncio.TimeoutError:
+                print("⚠️ {} 模型预热超时 ({}s)，继续".format(
+                    label, timeout_s))
+            except Exception as e:
+                print("⚠️ {} 模型预热失败: {}，继续".format(label, e))
 
     async def _wakeup_animation(self):
         """唤醒动画 — 机器人起立+伸懒腰

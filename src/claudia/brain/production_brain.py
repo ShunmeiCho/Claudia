@@ -115,7 +115,9 @@ class ProductionBrain:
         import os
         self.model_7b = os.getenv("BRAIN_MODEL_7B", "claudia-7b:v2.0")
 
-        self.logger.info(f"🧠 📌 7B模型: {self.model_7b}")
+        _mode = os.getenv("BRAIN_ROUTER_MODE", "dual")
+        if _mode != "dual":
+            self.logger.info("🧠 7B模型: {}".format(self.model_7b))
         
         # 精简动作缓存（仅保留文化特定词和LLM容易出错的核心命令）
         self.hot_cache = {
@@ -144,8 +146,8 @@ class ProductionBrain:
             "おすわり": {"response": "お座りします", "api_code": 1009},
             "立って": {"response": "立ちます", "api_code": 1004},
             "タッテ": {"response": "立ちます", "api_code": 1004},
-            "伏せる": {"response": "伏せます", "api_code": 1005},
-            "横になる": {"response": "横になります", "api_code": 1005},
+            "伏せて": {"response": "伏せます", "api_code": 1005},
+            "横になって": {"response": "横になります", "api_code": 1005},
 
             # === 核心表演动作 ===
             "お手": {"response": "こんにちは", "api_code": 1016},
@@ -167,15 +169,15 @@ class ProductionBrain:
             "さようなら": {"response": "さようなら！またね。", "api_code": 1016},
             "おやすみ": {"response": "おやすみなさい！", "api_code": 1016},
             "おやすみなさい": {"response": "おやすみなさい！", "api_code": 1016},
-            "good morning": {"response": "Good morning! 挨拶します", "api_code": 1016},
-            "good evening": {"response": "Good evening! 挨拶します", "api_code": 1016},
-            "good night": {"response": "Good night! 挨拶します", "api_code": 1016},
-            "goodbye": {"response": "Goodbye! またね。", "api_code": 1016},
-            "bye": {"response": "Goodbye! またね。", "api_code": 1016},
-            "早上好": {"response": "早上好！挨拶します", "api_code": 1016},
-            "晚上好": {"response": "晚上好！挨拶します", "api_code": 1016},
-            "晚安": {"response": "晚安！", "api_code": 1016},
-            "再见": {"response": "再见！またね。", "api_code": 1016},
+            "good morning": {"response": "おはようございます！挨拶します", "api_code": 1016},
+            "good evening": {"response": "こんばんは！挨拶します", "api_code": 1016},
+            "good night": {"response": "おやすみなさい！挨拶します", "api_code": 1016},
+            "goodbye": {"response": "さようなら！またね。", "api_code": 1016},
+            "bye": {"response": "さようなら！またね。", "api_code": 1016},
+            "早上好": {"response": "おはようございます！挨拶します", "api_code": 1016},
+            "晚上好": {"response": "こんばんは！挨拶します", "api_code": 1016},
+            "晚安": {"response": "おやすみなさい！", "api_code": 1016},
+            "再见": {"response": "さようなら！またね。", "api_code": 1016},
 
             # === 褒め言葉 → Heart(1036) ===
             "かわいい": {"response": "ありがとう！ハートします", "api_code": 1036},
@@ -296,7 +298,7 @@ class ProductionBrain:
         self.last_executed_api = None       # 最后执行的API代码
 
         # PR2: 双通道路由器（BRAIN_ROUTER_MODE 环境变量控制）
-        router_mode_str = os.getenv("BRAIN_ROUTER_MODE", "legacy")
+        router_mode_str = os.getenv("BRAIN_ROUTER_MODE", "dual")
         try:
             self._router_mode = RouterMode(router_mode_str)
         except ValueError:
@@ -586,8 +588,8 @@ class ProductionBrain:
         # 基本動作
         "すわって": "座って",
         "たって": "立って",
-        "ふせる": "伏せる",
-        "よこになる": "横になる",
+        "ふせて": "伏せて",
+        "よこになって": "横になって",
         # 表演動作
         "あいさつ": "挨拶",
         "のび": "伸び",
@@ -985,9 +987,68 @@ class ProductionBrain:
             self.logger.warning("Action 模型不可用: {}".format(e))
             return False
 
+    async def _ensure_model_loaded(self, model, num_ctx=2048):
+        # type: (str, int) -> bool
+        """推理前预检: 确保目标模型已加载到 GPU 显存
+
+        检查 ollama.ps() 是否包含目标模型。如果不在显存中，发送一个
+        num_predict=1 的轻量请求触发模型加载（最多等 60s）。
+        这样后续推理的 timeout 只需覆盖纯推理时间，不含模型交换。
+
+        Returns:
+            True=模型已就绪, False=加载失败（调用方仍可继续尝试推理）
+        """
+        if not OLLAMA_AVAILABLE:
+            return True  # 无法检查，乐观通过
+
+        try:
+            ps_result = ollama.ps()
+            loaded_names = [m.model for m in (ps_result.models or [])]
+            # ollama.ps() 返回带 tag 的全名 (如 "model:latest")
+            # 传入的 model 可能不带 tag，需要用 base name 比较
+            loaded_base = [n.split(':')[0] for n in loaded_names]
+            model_base = model.split(':')[0]
+            if model in loaded_names or model_base in loaded_base:
+                return True  # 已在显存中
+
+            # 模型不在显存 → 触发加载
+            self.logger.warning(
+                "模型 {} 不在GPU显存 (当前: {})，触发预加载..."
+                .format(model, loaded_names or "无")
+            )
+
+            _num_ctx = num_ctx
+
+            def _sync_preload():
+                ollama.chat(
+                    model=model,
+                    messages=[{'role': 'user', 'content': 'hi'}],
+                    format='json',
+                    options={'num_predict': 1, 'num_ctx': _num_ctx},
+                    keep_alive='30m',
+                )
+
+            loop = asyncio.get_event_loop()
+            start = time.monotonic()
+            await asyncio.wait_for(
+                loop.run_in_executor(None, _sync_preload),
+                timeout=60,
+            )
+            elapsed_ms = (time.monotonic() - start) * 1000
+            self.logger.info("模型 {} 预加载完成 ({:.0f}ms)".format(model, elapsed_ms))
+            return True
+
+        except asyncio.TimeoutError:
+            self.logger.error("模型 {} 预加载超时 (60s)".format(model))
+            return False
+        except Exception as e:
+            self.logger.warning("模型预加载检查异常: {}".format(e))
+            return True  # 异常时乐观通过，让推理自行处理
+
     async def _call_ollama_v2(self, model, command, timeout=10,
-                              num_predict=100, num_ctx=2048):
-        # type: (str, str, int, int, int) -> Optional[Dict]
+                              num_predict=100, num_ctx=2048,
+                              output_format='json'):
+        # type: (str, str, int, int, int, Any) -> Optional[Dict]
         """调用 Ollama LLM 推理
 
         Args:
@@ -996,6 +1057,8 @@ class ProductionBrain:
             timeout: 异步超时秒数
             num_predict: 最大生成 token 数（Action 通道传 30，Legacy 默认 100）
             num_ctx: 上下文窗口大小（Action 通道传 1024，Legacy 默认 2048）
+            output_format: 输出格式约束。'json' = 任意合法 JSON（7B 用），
+                          dict = JSON Schema 结构化输出（Action 通道用 ACTION_SCHEMA）
         """
         if not OLLAMA_AVAILABLE:
             self.logger.warning("ollama库不可用，使用旧方法")
@@ -1004,13 +1067,14 @@ class ProductionBrain:
         # 闭包捕获: 将参数绑定到局部变量供 _sync_ollama_call 使用
         _num_predict = num_predict
         _num_ctx = num_ctx
+        _output_format = output_format
 
         try:
             def _sync_ollama_call():
                 response = ollama.chat(
                     model=model,
                     messages=[{'role': 'user', 'content': command}],
-                    format='json',
+                    format=_output_format,
                     options={
                         'temperature': 0.0,
                         'num_predict': _num_predict,
@@ -1531,10 +1595,11 @@ class ProductionBrain:
         if self._router_mode == RouterMode.LEGACY:
             # --- Legacy 直通路径（零行为变更）---
             self.logger.info("使用7B模型推理...")
+            await self._ensure_model_loaded(self.model_7b, num_ctx=2048)
             result = await self._call_ollama_v2(
                 self.model_7b,
                 command,
-                timeout=25,
+                timeout=30,
             )
 
             if result:

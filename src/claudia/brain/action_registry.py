@@ -41,7 +41,7 @@ _ACTIONS = [
     # --- 表演动作（无参数，需站立的标注）---
     ActionDef(1016, "Hello",      "挨拶します",     requires_standing=True),
     ActionDef(1017, "Stretch",    "伸びをします",   requires_standing=True),
-    ActionDef(1021, "Wallow",     "転がります"),     # 地面动作，不需站立
+    ActionDef(1021, "Wallow",     "転がります", enabled=False),  # Go2固件不支持(3203)
     ActionDef(1022, "Dance1",     "ダンス1します",   requires_standing=True),
     ActionDef(1023, "Dance2",     "ダンス2します",   requires_standing=True),
     ActionDef(1029, "Scrape",     "刮ります",       requires_standing=True),

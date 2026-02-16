@@ -49,6 +49,7 @@ def _make_brain():
     brain.audit_logger = None
     brain.last_posture_standing = False
     brain.EMERGENCY_COMMANDS = {}
+    brain._generate_conversational_response = lambda cmd: "はい、何でしょうか？"
     return brain
 
 
@@ -151,7 +152,7 @@ class TestDualRoute:
         call_count = {"action": 0, "legacy": 0}
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v1":
+            if model == "claudia-action-v2.1":
                 call_count["action"] += 1
                 return {"a": 1009}
             else:
@@ -175,71 +176,64 @@ class TestDualRoute:
             loop.close()
 
     def test_dual_a_null_goes_voice(self):
-        """Dual: a=null → voice 回退获取文本响应（Invariant 2）"""
+        """Dual: a=null → 模板対話応答（Invariant 2: 不为空）"""
         brain = _make_brain()
         router = ChannelRouter(brain, RouterMode.DUAL)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v1":
-                return {"a": None}
-            else:
-                return {"r": "私はClaudiaです", "a": None}
+            return {"a": None}  # Action 模型: 无动作
 
         brain._call_ollama_v2 = mock_ollama
-        brain._sanitize_response = lambda x: x
 
         loop = asyncio.new_event_loop()
         try:
             result = loop.run_until_complete(router.route("お名前は？"))
             assert result.api_code is None
             assert result.route == ROUTE_VOICE_CHANNEL
-            # Invariant 2: 响应不为空
+            # Invariant 2: 响应不为空（模板生成）
             assert len(result.response) > 0
-            assert "Claudia" in result.response
         finally:
             loop.close()
 
     def test_dual_action_timeout_fallback(self):
-        """Dual: action 通道超时 → 回退 legacy"""
+        """Dual: action 通道超时 → 模板回退（不调用 7B）"""
         brain = _make_brain()
         router = ChannelRouter(brain, RouterMode.DUAL)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v1":
-                return None  # 超时
+            if model == "claudia-action-v2.1":
+                return None  # 超時
             else:
                 return {"r": "座ります", "a": 1009}
 
         brain._call_ollama_v2 = mock_ollama
-        brain._sanitize_response = lambda x: x
 
         loop = asyncio.new_event_loop()
         try:
             result = loop.run_until_complete(router.route("おすわり"))
-            # 回退到 legacy 成功
-            assert result.api_code == 1009
+            # 模板回退: 無動作，模板文本応答
+            assert result.api_code is None
             assert result.route == ROUTE_ACTION_FALLBACK
+            assert len(result.response) > 0
         finally:
             loop.close()
 
     def test_dual_invalid_api_code_fallback(self):
-        """Dual: action 通道返回非法 api_code → 回退"""
+        """Dual: action 通道返回非法 api_code → 模板回退"""
         brain = _make_brain()
         router = ChannelRouter(brain, RouterMode.DUAL)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v1":
-                return {"a": 9999}  # 非法代码
-            else:
-                return {"r": "座ります", "a": 1009}
+            return {"a": 9999}  # 非法代码（只需 action model 路径）
 
         brain._call_ollama_v2 = mock_ollama
-        brain._sanitize_response = lambda x: x
 
         loop = asyncio.new_event_loop()
         try:
             result = loop.run_until_complete(router.route("おすわり"))
             assert result.route == ROUTE_ACTION_FALLBACK
+            assert result.api_code is None
+            assert len(result.response) > 0
         finally:
             loop.close()
 
@@ -249,7 +243,7 @@ class TestDualRoute:
         router = ChannelRouter(brain, RouterMode.DUAL)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v1":
+            if model == "claudia-action-v2.1":
                 return {"s": [1004, 1016]}
             return None
 
@@ -275,7 +269,7 @@ class TestShadowRoute:
         router = ChannelRouter(brain, RouterMode.SHADOW)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v1":
+            if model == "claudia-action-v2.1":
                 return {"a": 1016}  # dual 选 hello
             else:
                 return {"r": "座ります", "a": 1009}  # legacy 选 sit
@@ -298,7 +292,7 @@ class TestShadowRoute:
         router = ChannelRouter(brain, RouterMode.SHADOW)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v1":
+            if model == "claudia-action-v2.1":
                 return {"a": 1016}
             else:
                 return {"r": "座ります", "a": 1009}
@@ -337,12 +331,16 @@ class TestShadowRoute:
             loop.close()
 
     def test_shadow_timeout_recorded(self):
-        """Shadow: wait_for 超时 → dual_status='timeout'（Invariant 4）"""
+        """Shadow: _action_channel_shadow 超时 → dual_status='timeout'（Invariant 4）
+
+        单 GPU 顺序设计: _action_channel_shadow 包装了 action 通道调用，
+        超时时返回 _action_status="timeout" 的 RouterResult。
+        """
         brain = _make_brain()
         router = ChannelRouter(brain, RouterMode.SHADOW)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v1":
+            if model == "claudia-action-v2.1":
                 await asyncio.sleep(10)  # 超时
                 return {"a": 1009}
             else:
@@ -353,28 +351,13 @@ class TestShadowRoute:
 
         loop = asyncio.new_event_loop()
         try:
-            # 用较短超时测试（monkey-patch _build_shadow_comparison 的超时）
-            original = router._build_shadow_comparison
+            # monkey-patch _action_channel_shadow 使用短超时（避免等待 10s）
+            original = router._action_channel_shadow
 
-            async def fast_shadow(legacy_result, dual_task):
-                try:
-                    dual_result = await asyncio.wait_for(
-                        asyncio.shield(dual_task), timeout=0.1)
-                    return {"dual_status": "ok", "raw_agreement": True}
-                except asyncio.TimeoutError:
-                    if not dual_task.done():
-                        dual_task.cancel()
-                    return {
-                        "legacy_api_code": legacy_result.api_code,
-                        "dual_api_code": None,
-                        "dual_sequence": None,
-                        "dual_status": "timeout",
-                        "raw_agreement": False,
-                        "high_risk_divergence": False,
-                        "legacy_ms": 0, "dual_ms": 100,
-                    }
+            async def fast_action_shadow(command, request_id, timeout=20):
+                return await original(command, request_id, timeout=0.1)
 
-            router._build_shadow_comparison = fast_shadow
+            router._action_channel_shadow = fast_action_shadow
             result = loop.run_until_complete(router.route("test"))
             sc = result.shadow_comparison
             assert sc["dual_status"] == "timeout"
@@ -393,7 +376,7 @@ class TestShadowRoute:
         router = ChannelRouter(brain, RouterMode.SHADOW)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v1":
+            if model == "claudia-action-v2.1":
                 return None  # Ollama 内部超时
             else:
                 return {"r": "座ります", "a": 1009}
@@ -423,7 +406,7 @@ class TestShadowRoute:
         router = ChannelRouter(brain, RouterMode.SHADOW)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v1":
+            if model == "claudia-action-v2.1":
                 return {"a": 9999}  # 非法 api_code
             else:
                 return {"r": "やります", "a": None}
@@ -449,7 +432,7 @@ class TestShadowRoute:
         router = ChannelRouter(brain, RouterMode.SHADOW)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v1":
+            if model == "claudia-action-v2.1":
                 return {"a": 1009}  # 合法
             else:
                 return {"r": "座ります", "a": 1009}
@@ -479,7 +462,7 @@ class TestSafetyCompilerIntegration:
         brain._channel_router = ChannelRouter(brain, RouterMode.DUAL)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v1":
+            if model == "claudia-action-v2.1":
                 return {"a": 1030}  # FrontFlip（高风险）
             return {"r": "やります", "a": 1030}
 
@@ -582,7 +565,7 @@ class TestSequenceValidation:
         router = ChannelRouter(brain, RouterMode.DUAL)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v1":
+            if model == "claudia-action-v2.1":
                 return {"s": [1004, 1009]}  # 全部合法
             return None
 
@@ -601,7 +584,7 @@ class TestSequenceValidation:
         router = ChannelRouter(brain, RouterMode.DUAL)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v1":
+            if model == "claudia-action-v2.1":
                 return {"s": [1004, 9999, 1009]}  # 9999 非法
             return None
 
@@ -621,7 +604,7 @@ class TestSequenceValidation:
         router = ChannelRouter(brain, RouterMode.DUAL)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v1":
+            if model == "claudia-action-v2.1":
                 return {"s": [9999, 8888]}
             else:
                 return {"r": "座ります", "a": 1009}
@@ -645,7 +628,7 @@ class TestSequenceValidation:
         assert len(long_seq) > MAX_SEQUENCE_LENGTH
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v1":
+            if model == "claudia-action-v2.1":
                 return {"s": long_seq}
             return None
 
@@ -660,46 +643,39 @@ class TestSequenceValidation:
             loop.close()
 
     def test_sequence_empty_fallback(self):
-        """空序列 [] → 回退 legacy → legacy 有动作则 ROUTE_ACTION_FALLBACK"""
+        """空序列 [] → 模板回退"""
         brain = _make_brain()
         router = ChannelRouter(brain, RouterMode.DUAL)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v1":
-                return {"s": []}
-            else:
-                return {"r": "座ります", "a": 1009}  # legacy 返回有效动作
+            return {"s": []}  # 空序列
 
         brain._call_ollama_v2 = mock_ollama
-        brain._sanitize_response = lambda x: x
 
         loop = asyncio.new_event_loop()
         try:
             result = loop.run_until_complete(router.route("test"))
-            # action 通道空序列 → 回退 legacy → legacy 有动作 → 模板响应
             assert result.route == ROUTE_ACTION_FALLBACK
-            assert result.api_code == 1009
+            assert result.api_code is None
+            assert len(result.response) > 0
         finally:
             loop.close()
 
     def test_sequence_non_list_fallback(self):
-        """s 不是列表 → 回退"""
+        """s 不是列表 → 模板回退"""
         brain = _make_brain()
         router = ChannelRouter(brain, RouterMode.DUAL)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v1":
-                return {"s": "not_a_list"}
-            else:
-                return {"r": "座ります", "a": 1009}
+            return {"s": "not_a_list"}
 
         brain._call_ollama_v2 = mock_ollama
-        brain._sanitize_response = lambda x: x
 
         loop = asyncio.new_event_loop()
         try:
             result = loop.run_until_complete(router.route("test"))
             assert result.route == ROUTE_ACTION_FALLBACK
+            assert result.api_code is None
         finally:
             loop.close()
 
@@ -715,7 +691,7 @@ class TestShadowHighRiskDivergence:
         router = ChannelRouter(brain, RouterMode.SHADOW)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v1":
+            if model == "claudia-action-v2.1":
                 return {"a": 1009}  # dual: Sit（安全）
             else:
                 return {"r": "フリップ!", "a": 1030}  # legacy: FrontFlip（高风险）
@@ -737,7 +713,7 @@ class TestShadowHighRiskDivergence:
         router = ChannelRouter(brain, RouterMode.SHADOW)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v1":
+            if model == "claudia-action-v2.1":
                 return {"a": 1009}  # Sit
             else:
                 return {"r": "立ちます", "a": 1004}  # StandUp
@@ -767,7 +743,8 @@ class TestActionChannelTokenBudget:
         captured_kwargs = {}
 
         async def mock_ollama(model, command, timeout=10,
-                              num_predict=100, num_ctx=2048):
+                              num_predict=100, num_ctx=2048,
+                              output_format='json'):
             captured_kwargs['num_predict'] = num_predict
             captured_kwargs['num_ctx'] = num_ctx
             return {"a": 1009}
@@ -794,7 +771,8 @@ class TestActionChannelTokenBudget:
         captured_kwargs = {}
 
         async def mock_ollama(model, command, timeout=10,
-                              num_predict=100, num_ctx=2048):
+                              num_predict=100, num_ctx=2048,
+                              output_format='json'):
             captured_kwargs['num_predict'] = num_predict
             captured_kwargs['num_ctx'] = num_ctx
             return {"r": "座ります", "a": 1009}
@@ -826,8 +804,9 @@ class TestActionSequenceConflict:
         router = ChannelRouter(brain, RouterMode.DUAL)
 
         async def mock_ollama(model, command, timeout=10,
-                              num_predict=100, num_ctx=2048):
-            if model == "claudia-action-v1":
+                              num_predict=100, num_ctx=2048,
+                              output_format='json'):
+            if model == "claudia-action-v2.1":
                 return {"a": 1009, "s": [1004, 1016]}  # 冲突!
             return {"r": "ok", "a": None}
 
@@ -851,8 +830,9 @@ class TestActionSequenceConflict:
         router = ChannelRouter(brain, RouterMode.DUAL)
 
         async def mock_ollama(model, command, timeout=10,
-                              num_predict=100, num_ctx=2048):
-            if model == "claudia-action-v1":
+                              num_predict=100, num_ctx=2048,
+                              output_format='json'):
+            if model == "claudia-action-v2.1":
                 return {"a": 1009}
             return {"r": "ok", "a": None}
 
@@ -872,84 +852,86 @@ class TestActionSequenceConflict:
 class TestNoDoubleLegacyCall:
     """Fix #3: action fallback 后不再重复调用 legacy"""
 
-    def test_action_fail_legacy_conversational_no_double_call(self):
-        """Action 模型失败 → legacy 返回纯对话 → 不再调 _voice_fallback"""
+    def test_action_fail_template_fallback_no_7b(self):
+        """Action 模型失败 → 模板回复，不调用 7B"""
         brain = _make_brain()
         router = ChannelRouter(brain, RouterMode.DUAL)
         call_count = {"legacy": 0}
 
         async def mock_ollama(model, command, timeout=10,
-                              num_predict=100, num_ctx=2048):
-            if model == "claudia-action-v1":
+                              num_predict=100, num_ctx=2048,
+                              output_format='json'):
+            if model == "claudia-action-v2.1":
                 return None  # action 模型失败
             else:
                 call_count["legacy"] += 1
-                return {"r": "今日はいい天気ですね", "a": None}  # 纯对话
+                return {"r": "fallback", "a": None}
 
         brain._call_ollama_v2 = mock_ollama
-        brain._sanitize_response = lambda x: x
 
         loop = asyncio.new_event_loop()
         try:
             result = loop.run_until_complete(router.route("天気について"))
-            # legacy 应该只被调用 1 次（action fallback），不是 2 次
-            assert call_count["legacy"] == 1, (
-                "Legacy LLM 应只调用 1 次, 实际 {} 次".format(call_count["legacy"]))
+            # Action-primary: 失败时用模板回复，7B 不被调用
+            assert call_count["legacy"] == 0, (
+                "7B 不应被调用, 实际 {} 次".format(call_count["legacy"]))
             assert result.route == ROUTE_ACTION_FALLBACK
-            assert "天気" in result.response
+            assert result.api_code is None
+            assert result.response  # 模板回复非空
         finally:
             loop.close()
 
-    def test_action_null_normal_voice_fallback_still_works(self):
-        """Action 正常返回 a=null → 走 voice_fallback（这不是 fallback 路由）"""
+    def test_action_null_template_response_no_7b(self):
+        """Action 正常返回 a=null → 模板对话回复，不调用 7B"""
         brain = _make_brain()
         router = ChannelRouter(brain, RouterMode.DUAL)
         call_count = {"total": 0}
 
         async def mock_ollama(model, command, timeout=10,
-                              num_predict=100, num_ctx=2048):
+                              num_predict=100, num_ctx=2048,
+                              output_format='json'):
             call_count["total"] += 1
-            if model == "claudia-action-v1":
+            if model == "claudia-action-v2.1":
                 return {"a": None}  # 正常: 无动作
             else:
-                return {"r": "今日はいい天気ですね", "a": None}
+                return {"r": "不应到达", "a": None}
 
         brain._call_ollama_v2 = mock_ollama
-        brain._sanitize_response = lambda x: x
 
         loop = asyncio.new_event_loop()
         try:
             result = loop.run_until_complete(router.route("天気について"))
-            # action(1次) + voice_fallback(1次) = 2 次 LLM 调用（正常）
-            assert call_count["total"] == 2
+            # Action-primary: a=null 用模板，只调 action 模型 1 次
+            assert call_count["total"] == 1
             assert result.route == ROUTE_VOICE_CHANNEL
+            assert result.response  # 模板回复非空
         finally:
             loop.close()
 
-    def test_action_fallback_with_action_no_extra_voice(self):
-        """Action 失败 → legacy 返回有动作 → 直接使用，无额外 voice 调用"""
+    def test_action_success_no_7b_call(self):
+        """Action 返回有效动作 → 模板响应，7B 不被调用"""
         brain = _make_brain()
         router = ChannelRouter(brain, RouterMode.DUAL)
         call_count = {"legacy": 0}
 
         async def mock_ollama(model, command, timeout=10,
-                              num_predict=100, num_ctx=2048):
-            if model == "claudia-action-v1":
-                return None  # action 失败
+                              num_predict=100, num_ctx=2048,
+                              output_format='json'):
+            if model == "claudia-action-v2.1":
+                return {"a": 1009}  # 座る
             else:
                 call_count["legacy"] += 1
-                return {"r": "座ります", "a": 1009}  # legacy 返回有动作
+                return {"r": "不应到达", "a": 1009}
 
         brain._call_ollama_v2 = mock_ollama
-        brain._sanitize_response = lambda x: x
 
         loop = asyncio.new_event_loop()
         try:
             result = loop.run_until_complete(router.route("おすわり"))
-            # legacy 只调用 1 次（fallback），有动作所以不进 voice
-            assert call_count["legacy"] == 1
-            assert result.route == ROUTE_ACTION_FALLBACK
+            # 7B 完全不被调用
+            assert call_count["legacy"] == 0
             assert result.api_code == 1009
+            assert result.response  # ACTION_RESPONSES 模板
         finally:
             loop.close()
 

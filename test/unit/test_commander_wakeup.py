@@ -350,8 +350,8 @@ class TestActionModelWarmup:
         assert warmed_models[0] == "test-action-model"  # Action 先
         assert warmed_models[1] == "test-model"          # 7B 后（驻留显存）
 
-    def test_dual_mode_warms_7b_first_action_last(self):
-        """Dual 模式: 7B 先预热 → Action 后预热（Action 驻留显存，首条命令主路径）"""
+    def test_dual_mode_warms_action_only(self):
+        """Dual 模式 (Action-primary): 只预热 Action 模型，不预热 7B"""
         cmd = _make_commander(router_mode="dual")
         warmed_models = []
 
@@ -362,9 +362,8 @@ class TestActionModelWarmup:
         with patch.dict('sys.modules', {'ollama': MagicMock(chat=mock_chat)}):
             _run(cmd._warmup_model())
 
-        assert len(warmed_models) == 2
-        assert warmed_models[0] == "test-model"          # 7B 先
-        assert warmed_models[1] == "test-action-model"   # Action 后（驻留显存）
+        assert len(warmed_models) == 1
+        assert warmed_models[0] == "test-action-model"   # Action 唯一预热
 
     def test_shadow_first_timeout_still_warms_second(self):
         """Shadow 模式: Action 超时 → 7B 仍然预热（超时隔离）"""

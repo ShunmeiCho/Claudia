@@ -45,6 +45,10 @@ try:
 except ImportError as e:
     logging.getLogger("SystemStateMonitor").debug("ROS2 导入失败: %s", e)
     ROS2_AVAILABLE = False
+    # ROS2 不可用时的占位定义，使 SystemMonitorNode 类定义不报 NameError
+    Node = object
+    String = Float32 = Bool = object
+    UNITREE_MSGS_AVAILABLE = False
 
 class SystemState(IntEnum):
     """系统状态枚举（按优先级排序）"""
@@ -583,8 +587,8 @@ class SystemStateMonitor:
 
 class SystemMonitorNode(Node):
     """ROS2系统监控节点"""
-    
-    def __init__(self, 
+
+    def __init__(self,
                  node_name: str,
                  state_callback: Callable[[SystemStateInfo], None],
                  error_callback: Callable[[int, str], None]):
