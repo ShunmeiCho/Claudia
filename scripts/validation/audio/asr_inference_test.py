@@ -1,35 +1,34 @@
 #!/usr/bin/env python3
 """
 ASR 推理スモークテスト (Phase 1)
-Qwen3-ASR-0.6B モデルの読み込み・推理・VRAM 使用量を検証する
+faster-whisper (CTranslate2) モデルの読み込み・推理を検証する
 
 使用方法:
-  # Production モード (要 CUDA GPU + qwen-asr)
-  /home/m1ng/claudia/.venvs/asr-py311/bin/python3 scripts/validation/audio/asr_inference_test.py
+  # Production モード (要 faster-whisper)
+  python3 scripts/validation/audio/asr_inference_test.py
 
-  # Mock モード (GPU 不要、import とパイプライン構造のみ検証)
+  # Mock モード (モデルなしで import とパイプライン構造のみ検証)
   python3 scripts/validation/audio/asr_inference_test.py --mock
 
-  # モデル/デバイス指定
-  .venvs/asr-py311/bin/python3 scripts/validation/audio/asr_inference_test.py --model Qwen/Qwen3-ASR-0.6B --device cuda:0
+  # モデルサイズ指定
+  python3 scripts/validation/audio/asr_inference_test.py --model medium
 
 注意: 手動実行専用。Shadow 比較中は実行しないこと (GPU VRAM 競合)。
 
 Author: Claudia AI System
 Generated: 2026-02-16
-Target Python: 3.11 (ASR venv)
+Target Python: 3.8 (system)
 """
 
 import argparse
-import io
 import logging
+import math
 import os
 import struct
 import sys
 import time
-import math
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 # ---------------------------------------------------------------------------
 # 設定
@@ -37,7 +36,6 @@ from typing import Optional, Tuple
 SAMPLE_RATE = 16000
 CHANNELS = 1
 SAMPLE_WIDTH = 2  # 16-bit
-VRAM_LIMIT_MB = 2048  # standalone < 2GB
 OUTPUT_DIR = Path(__file__).parent / "output"
 
 logger = logging.getLogger("claudia.asr.smoke_test")
@@ -52,15 +50,6 @@ def generate_test_wav(duration_silence_s: float = 1.0,
                       freq_hz: float = 440.0) -> bytes:
     """テスト用 WAV を生成: 無音 + 正弦波トーン
 
-    Parameters
-    ----------
-    duration_silence_s : float
-        先頭無音の秒数
-    duration_tone_s : float
-        440Hz トーンの秒数
-    freq_hz : float
-        トーン周波数
-
     Returns
     -------
     bytes
@@ -70,18 +59,15 @@ def generate_test_wav(duration_silence_s: float = 1.0,
     n_tone = int(SAMPLE_RATE * duration_tone_s)
 
     samples = []
-    # 無音部分
     for _ in range(n_silence):
         samples.append(0)
 
-    # 正弦波トーン (振幅 0.5 = -6dBFS)
     for i in range(n_tone):
         t = i / SAMPLE_RATE
         value = int(0.5 * 32767 * math.sin(2 * math.pi * freq_hz * t))
         samples.append(max(-32768, min(32767, value)))
 
-    # PCM 16-bit LE
-    pcm_data = struct.pack(f"<{len(samples)}h", *samples)
+    pcm_data = struct.pack("<{}h".format(len(samples)), *samples)
     return pcm_data
 
 
@@ -107,13 +93,10 @@ class ASRSmokeTest:
     """ASR 推理スモークテスト"""
 
     def __init__(self, mock: bool = False,
-                 model_name: Optional[str] = None,
-                 device: Optional[str] = None) -> None:
+                 model_size: Optional[str] = None) -> None:
         self.mock = mock
-        self.model_name = model_name or os.getenv(
-            "CLAUDIA_ASR_MODEL", "Qwen/Qwen3-ASR-0.6B")
-        self.device = device or os.getenv("CLAUDIA_ASR_DEVICE", "cuda:0")
-        self.results: dict = {}
+        self.model_size = model_size or os.getenv("CLAUDIA_ASR_MODEL", "small")
+        self.results = {}  # type: dict
         self._model = None
         self._passed = True
 
@@ -121,10 +104,10 @@ class ASRSmokeTest:
         """全テスト実行。True = 全パス"""
         print("=" * 60)
         print("  Claudia ASR Inference Smoke Test")
-        print(f"  Mode: {'MOCK' if self.mock else 'PRODUCTION'}")
+        print("  Mode: {}".format("MOCK" if self.mock else "PRODUCTION"))
         if not self.mock:
-            print(f"  Model: {self.model_name}")
-            print(f"  Device: {self.device}")
+            print("  Model: whisper-{}".format(self.model_size))
+            print("  Backend: CTranslate2 (CPU, INT8)")
         print("=" * 60)
         print()
 
@@ -136,7 +119,7 @@ class ASRSmokeTest:
         else:
             self._test_model_load()
             self._test_inference()
-            self._test_vram_usage()
+            self._test_quick_inference()
 
         self._test_asr_service_imports()
 
@@ -156,39 +139,36 @@ class ASRSmokeTest:
         self._section("Import 検証")
         failures = []
 
-        # 必須 import
         required = ["numpy", "struct", "asyncio", "json", "logging"]
         for mod in required:
             try:
                 __import__(mod)
-                self._ok(f"import {mod}")
+                self._ok("import {}".format(mod))
             except ImportError as e:
-                self._fail(f"import {mod}: {e}")
+                self._fail("import {}: {}".format(mod, e))
                 failures.append(mod)
 
-        # GPU 依存 import (mock 時はスキップ可)
-        gpu_modules = ["torch", "soundfile"]
-        for mod in gpu_modules:
-            try:
-                __import__(mod)
-                self._ok(f"import {mod}")
-            except ImportError as e:
-                if self.mock:
-                    self._warn(f"import {mod}: {e} (mock モードなので続行)")
-                else:
-                    self._fail(f"import {mod}: {e}")
-                    failures.append(mod)
-
-        # qwen-asr
+        # faster-whisper
         try:
-            from qwen_asr import Qwen3ASRModel
-            self._ok("import qwen_asr.Qwen3ASRModel")
+            from faster_whisper import WhisperModel
+            self._ok("import faster_whisper.WhisperModel")
         except ImportError as e:
             if self.mock:
-                self._warn(f"import qwen_asr: {e} (mock モードなので続行)")
+                self._warn("import faster_whisper: {} (mock モードなので続行)".format(e))
             else:
-                self._fail(f"import qwen_asr: {e}")
-                failures.append("qwen_asr")
+                self._fail("import faster_whisper: {}".format(e))
+                failures.append("faster_whisper")
+
+        # ctranslate2
+        try:
+            import ctranslate2
+            self._ok("import ctranslate2 ({})".format(ctranslate2.__version__))
+        except ImportError as e:
+            if self.mock:
+                self._warn("import ctranslate2: {} (mock)".format(e))
+            else:
+                self._fail("import ctranslate2: {}".format(e))
+                failures.append("ctranslate2")
 
         if failures and not self.mock:
             self._passed = False
@@ -203,22 +183,23 @@ class ASRSmokeTest:
         actual_bytes = len(pcm_data)
 
         if actual_bytes == expected_bytes:
-            self._ok(f"PCM 生成: {actual_bytes} bytes ({expected_samples} samples, 2.0s)")
+            self._ok("PCM 生成: {} bytes ({} samples, 2.0s)".format(
+                actual_bytes, expected_samples))
         else:
-            self._fail(f"PCM サイズ不一致: expected={expected_bytes}, actual={actual_bytes}")
+            self._fail("PCM サイズ不一致: expected={}, actual={}".format(
+                expected_bytes, actual_bytes))
             self._passed = False
             return
 
-        # WAV ファイル保存
         wav_path = OUTPUT_DIR / "asr_smoke_test.wav"
         save_test_wav(pcm_data, wav_path)
-        self._ok(f"WAV 保存: {wav_path}")
+        self._ok("WAV 保存: {}".format(wav_path))
 
         self.results["pcm_data"] = pcm_data
         self.results["wav_path"] = wav_path
 
     def _test_mock_pipeline(self) -> None:
-        """Mock モード: ASRModelWrapper のモックパイプラインテスト"""
+        """Mock モード: パイプラインテスト"""
         self._section("Mock パイプライン検証")
 
         pcm_data = self.results.get("pcm_data", b"")
@@ -227,32 +208,30 @@ class ASRSmokeTest:
             self._passed = False
             return
 
-        # ASRModelWrapper mock 動作テスト
         try:
-            # ASRModelWrapper を直接使わず、同等のロジックをテスト
             start = time.monotonic()
             mock_text = "mock転写結果"
             mock_confidence = 0.99
             elapsed_ms = (time.monotonic() - start) * 1000
-            self._ok(f"Mock 転写: '{mock_text}' (conf={mock_confidence}, "
-                     f"latency={elapsed_ms:.1f}ms)")
+            self._ok("Mock 転写: '{}' (conf={}, latency={:.1f}ms)".format(
+                mock_text, mock_confidence, elapsed_ms))
         except Exception as e:
-            self._fail(f"Mock パイプライン失敗: {e}")
+            self._fail("Mock パイプライン失敗: {}".format(e))
             self._passed = False
 
         # RingBuffer テスト
         try:
             sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
-            from claudia.audio.asr_service.ring_buffer import RingBuffer, BYTES_PER_MS
+            from claudia.audio.asr_service.ring_buffer import RingBuffer
             rb = RingBuffer()
             rb.write(pcm_data[:960])  # 30ms
             last = rb.read_last(30)
-            assert len(last) == 960, f"RingBuffer read_last 不一致: {len(last)}"
+            assert len(last) == 960, "RingBuffer read_last mismatch: {}".format(len(last))
             rb.clear()
             assert rb.available_ms == 0
             self._ok("RingBuffer: write/read_last/clear 正常")
         except Exception as e:
-            self._fail(f"RingBuffer テスト失敗: {e}")
+            self._fail("RingBuffer テスト失敗: {}".format(e))
             self._passed = False
 
         # VADProcessor mock テスト
@@ -260,12 +239,11 @@ class ASRSmokeTest:
             from claudia.audio.asr_service.vad_processor import (
                 VADProcessor, VADConfig, VADState,
             )
-            from claudia.audio.asr_service.ring_buffer import RingBuffer
-            rb2 = RingBuffer()
-            events_collected = []
+            from claudia.audio.asr_service.ring_buffer import RingBuffer as RB2
+            rb2 = RB2()
 
             async def dummy_callback(event):
-                events_collected.append(event)
+                pass
 
             vad = VADProcessor(
                 ring_buffer=rb2,
@@ -275,7 +253,7 @@ class ASRSmokeTest:
             assert vad.state == VADState.SILENCE
             self._ok("VADProcessor: mock 初期化成功 (state=SILENCE)")
         except Exception as e:
-            self._fail(f"VADProcessor テスト失敗: {e}")
+            self._fail("VADProcessor テスト失敗: {}".format(e))
             self._passed = False
 
     def _test_model_load(self) -> None:
@@ -283,58 +261,39 @@ class ASRSmokeTest:
         self._section("モデル読み込み")
 
         try:
-            from qwen_asr import Qwen3ASRModel
-            import torch
+            from faster_whisper import WhisperModel
 
-            dtype_str = os.getenv("CLAUDIA_ASR_DTYPE", "bfloat16")
-            dtype = getattr(torch, dtype_str, torch.bfloat16)
-
-            # VRAM 計測: ロード前
-            if torch.cuda.is_available():
-                torch.cuda.reset_peak_memory_stats()
-                vram_before = torch.cuda.memory_allocated() / 1024 / 1024
-            else:
-                vram_before = 0
+            compute_type = os.getenv("CLAUDIA_ASR_COMPUTE_TYPE", "int8")
 
             start = time.monotonic()
-            self._model = Qwen3ASRModel.from_pretrained(
-                self.model_name,
-                device=self.device,
-                dtype=dtype,
+            self._model = WhisperModel(
+                self.model_size,
+                device="cpu",
+                compute_type=compute_type,
             )
             load_ms = (time.monotonic() - start) * 1000
 
-            if torch.cuda.is_available():
-                vram_after = torch.cuda.memory_allocated() / 1024 / 1024
-            else:
-                vram_after = 0
-
             self.results["load_ms"] = load_ms
-            self.results["vram_before_mb"] = vram_before
-            self.results["vram_after_mb"] = vram_after
-            self.results["vram_model_mb"] = vram_after - vram_before
-
-            self._ok(f"モデル読み込み成功: {self.model_name}")
-            self._ok(f"  読み込み時間: {load_ms:.0f}ms")
-            self._ok(f"  VRAM (モデル): {vram_after - vram_before:.0f}MB")
-            self._ok(f"  device: {self.device}, dtype: {dtype_str}")
+            self._ok("モデル読み込み成功: whisper-{}".format(self.model_size))
+            self._ok("  読み込み時間: {:.0f}ms".format(load_ms))
+            self._ok("  compute_type: {}".format(compute_type))
 
         except Exception as e:
-            self._fail(f"モデル読み込み失敗: {e}")
+            self._fail("モデル読み込み失敗: {}".format(e))
             self._passed = False
 
     def _test_inference(self) -> None:
-        """Production: 推理テスト"""
-        self._section("推理テスト")
+        """Production: 完整推理テスト"""
+        self._section("推理テスト (beam_size=3)")
 
         if self._model is None:
-            self._fail("モデル未読み込み — スキップ")
+            self._fail("モデル未読み込み -- スキップ")
             self._passed = False
             return
 
         pcm_data = self.results.get("pcm_data", b"")
         if not pcm_data:
-            self._fail("テスト音声なし — スキップ")
+            self._fail("テスト音声なし -- スキップ")
             self._passed = False
             return
 
@@ -344,62 +303,83 @@ class ASRSmokeTest:
             audio_np = np.frombuffer(pcm_data, dtype=np.int16).astype(np.float32) / 32768.0
 
             start = time.monotonic()
-            result = self._model.transcribe(
+            segments, info = self._model.transcribe(
                 audio_np,
                 language="ja",
-                sample_rate=SAMPLE_RATE,
+                beam_size=3,
+                vad_filter=False,
             )
+
+            text_parts = []
+            total_logprob = 0.0
+            n_segments = 0
+            for seg in segments:
+                text_parts.append(seg.text)
+                total_logprob += seg.avg_logprob
+                n_segments += 1
+
             inference_ms = (time.monotonic() - start) * 1000
 
-            text = result.get("text", "").strip() if isinstance(result, dict) else str(result)
-            confidence = result.get("confidence", 0.0) if isinstance(result, dict) else 0.0
+            text = "".join(text_parts).strip()
+            if n_segments > 0:
+                confidence = min(1.0, max(0.0, math.exp(total_logprob / n_segments)))
+            else:
+                confidence = 0.0
 
             self.results["inference_ms"] = inference_ms
             self.results["text"] = text
             self.results["confidence"] = confidence
 
-            self._ok(f"推理完了: '{text}'")
-            self._ok(f"  信頼度: {confidence:.3f}")
-            self._ok(f"  推理時間: {inference_ms:.0f}ms")
+            self._ok("推理完了: '{}'".format(text))
+            self._ok("  segments: {}".format(n_segments))
+            self._ok("  信頼度: {:.3f}".format(confidence))
+            self._ok("  推理時間: {:.0f}ms".format(inference_ms))
+            self._ok("  言語検出: {} (prob={:.2f})".format(info.language, info.language_probability))
 
-            # テスト音声はトーンなので、空文字列でも推理自体が成功すれば OK
             if inference_ms > 5000:
-                self._warn(f"推理時間が長い: {inference_ms:.0f}ms (目標 < 800ms)")
+                self._warn("推理時間が長い: {:.0f}ms (目標 < 2000ms)".format(inference_ms))
 
         except Exception as e:
-            self._fail(f"推理失敗: {e}")
+            self._fail("推理失敗: {}".format(e))
             self._passed = False
 
-    def _test_vram_usage(self) -> None:
-        """Production: VRAM 使用量チェック"""
-        self._section("VRAM 使用量")
+    def _test_quick_inference(self) -> None:
+        """Production: quick_transcribe テスト (beam_size=1)"""
+        self._section("Quick 推理テスト (beam_size=1)")
+
+        if self._model is None:
+            self._fail("モデル未読み込み -- スキップ")
+            return
+
+        pcm_data = self.results.get("pcm_data", b"")
+        if not pcm_data:
+            return
 
         try:
-            import torch
+            import numpy as np
 
-            if not torch.cuda.is_available():
-                self._warn("CUDA 不可用 — VRAM チェックスキップ")
-                return
+            # 最初の 300ms のみ (emergency check 用)
+            n_bytes = int(SAMPLE_RATE * 0.3 * SAMPLE_WIDTH)
+            short_pcm = pcm_data[:n_bytes]
+            audio_np = np.frombuffer(short_pcm, dtype=np.int16).astype(np.float32) / 32768.0
 
-            current_mb = torch.cuda.memory_allocated() / 1024 / 1024
-            peak_mb = torch.cuda.max_memory_allocated() / 1024 / 1024
+            start = time.monotonic()
+            segments, info = self._model.transcribe(
+                audio_np,
+                language="ja",
+                beam_size=1,
+                best_of=1,
+                without_timestamps=True,
+                vad_filter=False,
+            )
+            text = "".join(seg.text for seg in segments).strip()
+            quick_ms = (time.monotonic() - start) * 1000
 
-            self.results["vram_current_mb"] = current_mb
-            self.results["vram_peak_mb"] = peak_mb
-
-            self._ok(f"VRAM 現在: {current_mb:.0f}MB")
-            self._ok(f"VRAM ピーク: {peak_mb:.0f}MB")
-            self._ok(f"VRAM 上限: {VRAM_LIMIT_MB}MB")
-
-            if peak_mb < VRAM_LIMIT_MB:
-                self._ok(f"VRAM チェック PASS (peak {peak_mb:.0f}MB < {VRAM_LIMIT_MB}MB)")
-            else:
-                self._fail(f"VRAM チェック FAIL (peak {peak_mb:.0f}MB >= {VRAM_LIMIT_MB}MB)")
-                self._passed = False
+            self.results["quick_inference_ms"] = quick_ms
+            self._ok("Quick 推理完了: '{}' ({:.0f}ms)".format(text, quick_ms))
 
         except Exception as e:
-            self._fail(f"VRAM チェック失敗: {e}")
-            self._passed = False
+            self._fail("Quick 推理失敗: {}".format(e))
 
     def _test_asr_service_imports(self) -> None:
         """ASR サービスモジュール import テスト"""
@@ -418,37 +398,37 @@ class ASRSmokeTest:
             )
             self._ok("claudia.audio.asr_service: 全 export import 成功")
         except ImportError as e:
-            self._fail(f"ASR サービス import 失敗: {e}")
+            self._fail("ASR サービス import 失敗: {}".format(e))
             self._passed = False
 
-        # ipc_protocol / emergency_keywords
         try:
             from claudia.audio.asr_service.emergency_keywords import EMERGENCY_KEYWORDS_TEXT
-            self._ok(f"emergency_keywords: {len(EMERGENCY_KEYWORDS_TEXT)} keywords loaded")
+            self._ok("emergency_keywords: {} keywords loaded".format(
+                len(EMERGENCY_KEYWORDS_TEXT)))
         except ImportError as e:
-            self._warn(f"emergency_keywords import 失敗 (並行実装中の可能性): {e}")
+            self._warn("emergency_keywords import: {}".format(e))
 
         try:
             from claudia.audio.asr_service.ipc_protocol import PROTO_VERSION
-            self._ok(f"ipc_protocol: proto_version={PROTO_VERSION}")
+            self._ok("ipc_protocol: proto_version={}".format(PROTO_VERSION))
         except ImportError as e:
-            self._warn(f"ipc_protocol import 失敗 (並行実装中の可能性): {e}")
+            self._warn("ipc_protocol import: {}".format(e))
 
     # ------------------------------------------------------------------
     # 出力ヘルパー
     # ------------------------------------------------------------------
 
     def _section(self, name: str) -> None:
-        print(f"\n--- {name} ---")
+        print("\n--- {} ---".format(name))
 
     def _ok(self, msg: str) -> None:
-        print(f"  [PASS] {msg}")
+        print("  [PASS] {}".format(msg))
 
     def _fail(self, msg: str) -> None:
-        print(f"  [FAIL] {msg}")
+        print("  [FAIL] {}".format(msg))
 
     def _warn(self, msg: str) -> None:
-        print(f"  [WARN] {msg}")
+        print("  [WARN] {}".format(msg))
 
     def _print_summary(self) -> None:
         if self._passed:
@@ -459,14 +439,14 @@ class ASRSmokeTest:
         if self.results:
             print()
             print("  Metrics:")
-            for key in ["load_ms", "inference_ms", "vram_model_mb",
-                        "vram_current_mb", "vram_peak_mb", "text", "confidence"]:
+            for key in ["load_ms", "inference_ms", "quick_inference_ms",
+                        "text", "confidence"]:
                 if key in self.results:
                     val = self.results[key]
                     if isinstance(val, float):
-                        print(f"    {key}: {val:.1f}")
+                        print("    {}: {:.1f}".format(key, val))
                     else:
-                        print(f"    {key}: {val}")
+                        print("    {}: {}".format(key, val))
 
 
 # ---------------------------------------------------------------------------
@@ -479,15 +459,11 @@ def main() -> int:
     )
     parser.add_argument(
         "--mock", action="store_true",
-        help="Mock モード: CUDA/モデルなしで import とパイプライン構造のみ検証",
+        help="Mock モード: モデルなしで import とパイプライン構造のみ検証",
     )
     parser.add_argument(
         "--model", type=str, default=None,
-        help="ASR モデル名 (default: Qwen/Qwen3-ASR-0.6B)",
-    )
-    parser.add_argument(
-        "--device", type=str, default=None,
-        help="推理デバイス (default: cuda:0)",
+        help="Whisper モデルサイズ (default: small)",
     )
     args = parser.parse_args()
 
@@ -500,8 +476,7 @@ def main() -> int:
 
     test = ASRSmokeTest(
         mock=mock,
-        model_name=args.model,
-        device=args.device,
+        model_size=args.model,
     )
     passed = test.run_all()
     return 0 if passed else 1

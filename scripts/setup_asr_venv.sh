@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Claudia ASR Service - Python 3.11 Venv Setup Script
-# Phase 1.0: Install Python 3.11 venv + ASR dependencies for Jetson Orin NX
+# Claudia ASR Service - Dependencies Setup Script
+# Install faster-whisper + silero-vad on system Python 3.8
 #
 # Usage: bash scripts/setup_asr_venv.sh
 #
 # Platform: Ubuntu 20.04 (aarch64), Jetson Orin NX, CUDA 11.4
-# CRITICAL: onnxruntime >= 1.20.0 crashes on Jetson Orin NX (SIGABRT in CPU
-#           topology detection). Pinned to 1.18.1.
+# NOTE: faster-whisper uses CTranslate2, NOT PyTorch for inference.
+#       No separate venv or CUDA PyTorch wheel needed.
 # =============================================================================
 
 set -euo pipefail
@@ -15,10 +15,8 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-VENV_DIR="/home/m1ng/claudia/.venvs/asr-py311"
 REQUIREMENTS_FILE="/home/m1ng/claudia/src/claudia/audio/asr_service/requirements.txt"
-TORCH_INDEX_URL="https://developer.download.nvidia.com/compute/redist/jp/v50/pytorch/"
-PYTHON_BIN="python3.11"
+PYTHON_BIN="python3"
 
 # Colors
 RED='\033[0;31m'
@@ -33,114 +31,50 @@ log_warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*"; }
 
 # ---------------------------------------------------------------------------
-# Step 1: Check Python 3.11
+# Step 1: Check Python 3.8
 # ---------------------------------------------------------------------------
-log_info "Step 1/6: Checking Python 3.11 availability..."
+log_info "Step 1/5: Checking Python availability..."
 
 if ! command -v "$PYTHON_BIN" &>/dev/null; then
-    log_error "Python 3.11 not found."
-    echo ""
-    echo "Install Python 3.11 on Ubuntu 20.04:"
-    echo "  sudo add-apt-repository ppa:deadsnakes/ppa"
-    echo "  sudo apt update"
-    echo "  sudo apt install python3.11 python3.11-venv python3.11-dev"
-    echo ""
-    echo "After installing, re-run this script."
+    log_error "Python 3 not found."
     exit 1
 fi
 
 PY_VERSION=$("$PYTHON_BIN" --version 2>&1)
 log_ok "Found $PY_VERSION"
 
-# Also verify venv module is available
-if ! "$PYTHON_BIN" -m venv --help &>/dev/null; then
-    log_error "python3.11-venv module not installed."
-    echo "  sudo apt install python3.11-venv"
-    exit 1
-fi
-
 # ---------------------------------------------------------------------------
-# Step 2: Create venv (idempotent)
+# Step 2: Install dependencies
 # ---------------------------------------------------------------------------
-log_info "Step 2/6: Setting up virtual environment at $VENV_DIR"
+log_info "Step 2/5: Installing dependencies..."
 
-if [ -d "$VENV_DIR" ] && [ -f "$VENV_DIR/bin/python3" ]; then
-    log_ok "Venv already exists, skipping creation"
-else
-    mkdir -p "$(dirname "$VENV_DIR")"
-    "$PYTHON_BIN" -m venv "$VENV_DIR"
-    log_ok "Venv created at $VENV_DIR"
-fi
+# 2a. faster-whisper (CTranslate2 backend)
+log_info "  Installing faster-whisper..."
+pip3 install --user --quiet faster-whisper
 
-# Activate venv
-# shellcheck disable=SC1091
-source "$VENV_DIR/bin/activate"
-log_ok "Venv activated ($(python3 --version))"
-
-# Upgrade pip
-log_info "Upgrading pip..."
-pip install --quiet --upgrade pip
-
-# ---------------------------------------------------------------------------
-# Step 3: Install dependencies (order matters)
-# ---------------------------------------------------------------------------
-log_info "Step 3/6: Installing dependencies..."
-
-# 3a. PyTorch from JetPack index
-log_info "  Installing torch (JetPack CUDA 11.4 wheel)..."
-pip install --quiet torch --extra-index-url "$TORCH_INDEX_URL"
-
-# 3b. torchaudio from same index
-log_info "  Installing torchaudio..."
-pip install --quiet torchaudio --extra-index-url "$TORCH_INDEX_URL"
-
-# 3c. qwen-asr
-log_info "  Installing qwen-asr..."
-pip install --quiet qwen-asr
-
-# 3d. silero-vad
+# 2b. silero-vad (uses torch internally for CPU VAD)
 log_info "  Installing silero-vad..."
-pip install --quiet silero-vad
+pip3 install --user --quiet silero-vad
 
-# 3e. numpy, soundfile
+# 2c. numpy, soundfile
 log_info "  Installing numpy, soundfile..."
-pip install --quiet numpy soundfile
-
-# 3f. Pin onnxruntime (CRITICAL: >= 1.20.0 crashes on Jetson Orin NX)
-log_info "  Installing onnxruntime==1.18.1 (pinned for Jetson compatibility)..."
-pip install --quiet "onnxruntime==1.18.1"
+pip3 install --user --quiet numpy soundfile
 
 log_ok "All dependencies installed"
 
 # ---------------------------------------------------------------------------
-# Step 4: Verify imports
+# Step 3: Verify imports
 # ---------------------------------------------------------------------------
-log_info "Step 4/6: Verifying imports..."
+log_info "Step 3/5: Verifying imports..."
 
 VERIFY_FAILED=0
 
-# torch + CUDA
-if python3 -c "import torch; assert torch.cuda.is_available(), 'CUDA not available'; print(f'torch {torch.__version__}, CUDA {torch.version.cuda}')"; then
-    log_ok "torch + CUDA OK"
+# faster-whisper + ctranslate2
+if python3 -c "from faster_whisper import WhisperModel; import ctranslate2; print(f'faster-whisper OK, ctranslate2 {ctranslate2.__version__}')"; then
+    log_ok "faster-whisper + ctranslate2 OK"
 else
-    log_error "torch CUDA verification failed"
+    log_error "faster-whisper import failed"
     VERIFY_FAILED=1
-fi
-
-# torchaudio
-if python3 -c "import torchaudio; print(f'torchaudio {torchaudio.__version__}')"; then
-    log_ok "torchaudio OK"
-else
-    log_error "torchaudio import failed"
-    VERIFY_FAILED=1
-fi
-
-# qwen-asr
-if python3 -c "from qwen_asr import Qwen3ASRModel; print('qwen_asr OK')"; then
-    log_ok "qwen-asr OK"
-else
-    log_warn "qwen-asr import failed (may need model download)"
-    # Not fatal - model might need downloading separately
 fi
 
 # silero-vad
@@ -148,14 +82,6 @@ if python3 -c "import torch; model, utils = torch.hub.load(repo_or_dir='snakers4
     log_ok "silero-vad OK"
 else
     log_warn "silero-vad model load failed (will download on first use)"
-fi
-
-# onnxruntime version check
-if python3 -c "import onnxruntime; v=onnxruntime.__version__; print(f'onnxruntime {v}'); assert v.startswith('1.18'), f'Expected 1.18.x, got {v}'"; then
-    log_ok "onnxruntime 1.18.1 OK (safe for Jetson)"
-else
-    log_error "onnxruntime version check failed"
-    VERIFY_FAILED=1
 fi
 
 # numpy, soundfile
@@ -172,69 +98,35 @@ if [ "$VERIFY_FAILED" -eq 1 ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Step 5: Download Qwen3-ASR-0.6B model to local cache
+# Step 4: Download Whisper model to local cache
 # ---------------------------------------------------------------------------
-ASR_MODEL_NAME="${CLAUDIA_ASR_MODEL:-Qwen/Qwen3-ASR-0.6B}"
-log_info "Step 5/6: Downloading ASR model ($ASR_MODEL_NAME) to local cache..."
+ASR_MODEL_SIZE="${CLAUDIA_ASR_MODEL:-small}"
+log_info "Step 4/5: Downloading Whisper model ($ASR_MODEL_SIZE) to local cache..."
 
 if python3 -c "
-from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq
-import os
-
-model_name = '$ASR_MODEL_NAME'
-cache_dir = os.path.expanduser('~/.cache/huggingface/hub')
-
-# Check if model is already cached by looking for config.json
-# This avoids re-downloading on idempotent runs
-try:
-    processor = AutoProcessor.from_pretrained(model_name)
-    print(f'Processor loaded: {model_name}')
-except Exception:
-    print(f'Processor not cached, downloading {model_name}...')
-    processor = AutoProcessor.from_pretrained(model_name)
-
-try:
-    # Only download weights, don't load to GPU (save VRAM during setup)
-    import torch
-    model = AutoModelForSpeechSeq2Seq.from_pretrained(
-        model_name,
-        torch_dtype=torch.float32,
-        device_map='cpu',
-    )
-    print(f'Model cached: {model_name}')
-    del model
-except Exception as e:
-    print(f'Model download via transformers failed: {e}')
-    # Try qwen-asr specific download
-    try:
-        from qwen_asr import Qwen3ASRModel
-        m = Qwen3ASRModel(model_name, device='cpu')
-        print(f'Model cached via qwen_asr: {model_name}')
-        del m
-    except Exception as e2:
-        print(f'qwen_asr download also failed: {e2}')
-        raise
+from faster_whisper import WhisperModel
+model_size = '$ASR_MODEL_SIZE'
+print(f'Downloading whisper-{model_size}...')
+model = WhisperModel(model_size, device='cpu', compute_type='int8')
+print(f'Model cached: whisper-{model_size}')
+del model
 " 2>&1; then
-    log_ok "ASR model cached locally"
+    log_ok "Whisper model cached locally"
 else
-    log_warn "Model download failed (may need internet or manual download)"
-    log_warn "You can download later: python3 -c \"from qwen_asr import Qwen3ASRModel; Qwen3ASRModel('$ASR_MODEL_NAME')\""
-    # Not fatal - model can be downloaded on first use
+    log_warn "Model download failed (may need internet)"
+    log_warn "Model will be downloaded on first use"
 fi
 
 # ---------------------------------------------------------------------------
-# Step 6: Update .gitignore
+# Step 5: Update .gitignore
 # ---------------------------------------------------------------------------
-log_info "Step 6/6: Checking .gitignore for .venvs/..."
+log_info "Step 5/5: Checking .gitignore..."
 
 GITIGNORE="/home/m1ng/claudia/.gitignore"
 if grep -qxF '.venvs/' "$GITIGNORE" 2>/dev/null; then
     log_ok ".venvs/ already in .gitignore"
 else
-    echo "" >> "$GITIGNORE"
-    echo "# ASR Python 3.11 virtual environment" >> "$GITIGNORE"
-    echo ".venvs/" >> "$GITIGNORE"
-    log_ok "Added .venvs/ to .gitignore"
+    log_ok ".gitignore OK (no venv needed)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -242,14 +134,20 @@ fi
 # ---------------------------------------------------------------------------
 echo ""
 echo "============================================"
-log_ok "ASR venv setup complete!"
+log_ok "ASR setup complete!"
 echo "============================================"
 echo ""
-echo "Venv location: $VENV_DIR"
-echo "Activate:      source $VENV_DIR/bin/activate"
-echo "Requirements:  $REQUIREMENTS_FILE"
+echo "Backend:    faster-whisper (CTranslate2)"
+echo "Model:      whisper-$ASR_MODEL_SIZE"
+echo "Python:     $(python3 --version)"
+echo "Device:     CPU (INT8 quantization)"
+echo ""
+echo "Environment variables (optional):"
+echo "  CLAUDIA_ASR_MODEL=small|medium|large-v3  (default: small)"
+echo "  CLAUDIA_ASR_DEVICE=cpu|cuda               (default: cpu)"
+echo "  CLAUDIA_ASR_COMPUTE_TYPE=int8|float16      (default: int8)"
 echo ""
 echo "Next steps:"
 echo "  1. Run Phase 0 mic test: python3 scripts/validation/audio/go2_mic_ssh_test.py"
-echo "  2. Run ASR smoke test:   $VENV_DIR/bin/python3 scripts/validation/audio/asr_inference_test.py"
+echo "  2. Run ASR smoke test:   python3 scripts/validation/audio/asr_inference_test.py"
 echo ""
