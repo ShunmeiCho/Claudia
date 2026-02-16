@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ASR 服务主入口 — 独立 Python 3.11 子进程
+ASR 服务主入口 — Python 3.8 系统进程
 
 3 路单向 UDS:
 - /tmp/claudia_audio.sock  (接收 PCM 音频流)
 - /tmp/claudia_asr_result.sock (发送 JSON Lines: transcript/emergency/heartbeat)
 - /tmp/claudia_asr_ctrl.sock   (接收 JSON Lines: tts_start/tts_end/shutdown)
 
-启动后加载 Qwen3-ASR-0.6B 模型，发送 handshake ready 消息。
-支持 --mock 标志或 ASR_MOCK=1 环境变量，mock 模式不加载 CUDA 模型。
+启动后加载 faster-whisper 模型 (CTranslate2 backend)，发送 handshake ready 消息。
+支持 --mock 标志或 ASR_MOCK=1 环境变量，mock 模式不加载模型。
 """
 
 import argparse
 import asyncio
 import json
 import logging
+import math
 import os
 import signal
 import sys
@@ -50,55 +51,64 @@ FRAME_BYTES = FRAME_MS * BYTES_PER_MS  # 960 bytes = 30ms
 # ======================================================================
 
 class ASRModelWrapper:
-    """Qwen3-ASR-0.6B 模型包装器
+    """faster-whisper (CTranslate2) 模型包装器
 
     封装模型加载和推理，支持 mock 模式。
+    使用 CTranslate2 backend，不依赖 PyTorch 做推理。
+
+    环境变量:
+    - CLAUDIA_ASR_MODEL: whisper 模型名 (tiny/base/small/medium/large-v3)，默认 small
+    - CLAUDIA_ASR_DEVICE: cpu 或 cuda (默认 cpu)
+    - CLAUDIA_ASR_COMPUTE_TYPE: int8/float16/float32 (默认 int8)
     """
 
     def __init__(self, mock: bool = False) -> None:
         self._mock = mock
         self._model: Optional[Any] = None
-        self._processor: Optional[Any] = None
-        self._vram_mb: int = 0
+        self._model_size: str = ""
+        self._compute_type: str = ""
+        self._ram_mb: int = 0
 
     def load(self) -> None:
-        """加载 ASR 模型到 GPU"""
+        """加载 faster-whisper 模型"""
         if self._mock:
-            logger.info("🧪 ASR mock 模式，跳过模型加载")
-            self._vram_mb = 0
+            logger.info("ASR mock 模式，跳过模型加载")
+            self._ram_mb = 0
             return
 
         try:
-            from qwen_asr import Qwen3ASRModel
-            import torch
+            from faster_whisper import WhisperModel
 
-            model_name = os.getenv("CLAUDIA_ASR_MODEL", "Qwen/Qwen3-ASR-0.6B")
-            device = os.getenv("CLAUDIA_ASR_DEVICE", "cuda:0")
-            dtype_str = os.getenv("CLAUDIA_ASR_DTYPE", "bfloat16")
-            dtype = getattr(torch, dtype_str, torch.bfloat16)
+            model_size = os.getenv("CLAUDIA_ASR_MODEL", "base")
+            device = os.getenv("CLAUDIA_ASR_DEVICE", "cpu")
+            compute_type = os.getenv("CLAUDIA_ASR_COMPUTE_TYPE", "int8")
 
-            logger.info("🧠 ASR 模型加载中: %s (device=%s, dtype=%s)",
-                        model_name, device, dtype_str)
+            logger.info("ASR 模型加载中: whisper-%s (device=%s, compute=%s)",
+                        model_size, device, compute_type)
 
-            self._model = Qwen3ASRModel.from_pretrained(
-                model_name,
+            self._model = WhisperModel(
+                model_size,
                 device=device,
-                dtype=dtype,
+                compute_type=compute_type,
             )
+            self._model_size = model_size
+            self._compute_type = compute_type
 
-            # 估算 VRAM 占用
-            if torch.cuda.is_available():
-                self._vram_mb = int(torch.cuda.memory_allocated() / 1024 / 1024)
-            else:
-                self._vram_mb = 600  # 估算值
+            # CTranslate2 不使用 PyTorch VRAM，估算 RAM 占用
+            size_ram_map = {
+                "tiny": 75, "base": 150, "small": 500,
+                "medium": 1500, "large-v3": 3000,
+            }
+            self._ram_mb = size_ram_map.get(model_size, 500)
 
-            logger.info("🧠 ASR 模型加载完成 (VRAM ~%dMB)", self._vram_mb)
+            logger.info("ASR 模型加载完成: whisper-%s (RAM ~%dMB)",
+                        model_size, self._ram_mb)
 
         except Exception as e:
-            logger.error("❌ ASR 模型加载失败: %s", e)
-            logger.warning("⚠️ 降级为 mock 模式")
+            logger.error("ASR 模型加载失败: %s", e)
+            logger.warning("降级为 mock 模式")
             self._mock = True
-            self._vram_mb = 0
+            self._ram_mb = 0
 
     def transcribe(self, audio_data: bytes) -> Tuple[str, float]:
         """完整语音段 ASR 转写
@@ -117,29 +127,91 @@ class ASRModelWrapper:
 
         try:
             import numpy as np
+
             audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
 
-            result = self._model.transcribe(
+            segments, info = self._model.transcribe(
                 audio_np,
                 language="ja",
-                sample_rate=SAMPLE_RATE,
+                beam_size=3,
+                vad_filter=False,  # 外部 VAD 已处理
             )
 
-            text = result.get("text", "").strip()
-            confidence = result.get("confidence", 0.0)
+            text_parts = []
+            total_logprob = 0.0
+            n_segments = 0
+            for seg in segments:
+                text_parts.append(seg.text)
+                total_logprob += seg.avg_logprob
+                n_segments += 1
+
+            text = "".join(text_parts).strip()
+
+            # avg_logprob → confidence (0-1)
+            if n_segments > 0:
+                avg_logprob = total_logprob / n_segments
+                confidence = min(1.0, max(0.0, math.exp(avg_logprob)))
+            else:
+                confidence = 0.0
+
             return (text, confidence)
 
         except Exception as e:
-            logger.error("❌ ASR 推理失败: %s", e)
+            logger.error("ASR 推理失败: %s", e)
             return ("", 0.0)
 
     def quick_transcribe(self, audio_data: bytes) -> Tuple[str, float]:
-        """短片段快速转写（Emergency 快速器用）"""
-        return self.transcribe(audio_data)
+        """短片段快速转写（Emergency 快速器用）
+
+        beam_size=1 + best_of=1 以最大化速度。
+        """
+        if self._mock:
+            return ("mock転写結果", 0.99)
+
+        try:
+            import numpy as np
+
+            audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
+
+            segments, info = self._model.transcribe(
+                audio_np,
+                language="ja",
+                beam_size=1,
+                best_of=1,
+                without_timestamps=True,
+                vad_filter=False,
+            )
+
+            text_parts = []
+            total_logprob = 0.0
+            n_segments = 0
+            for seg in segments:
+                text_parts.append(seg.text)
+                total_logprob += seg.avg_logprob
+                n_segments += 1
+
+            text = "".join(text_parts).strip()
+
+            if n_segments > 0:
+                avg_logprob = total_logprob / n_segments
+                confidence = min(1.0, max(0.0, math.exp(avg_logprob)))
+            else:
+                confidence = 0.0
+
+            return (text, confidence)
+
+        except Exception as e:
+            logger.error("Emergency ASR quick_transcribe 失败: %s", e)
+            return ("", 0.0)
 
     @property
     def vram_mb(self) -> int:
-        return self._vram_mb
+        """RAM 估算 (CTranslate2 CPU 模式无 VRAM 占用)"""
+        return self._ram_mb
+
+    @property
+    def model_name(self) -> str:
+        return f"whisper-{self._model_size}" if self._model_size else "mock"
 
     @property
     def is_mock(self) -> bool:
@@ -287,10 +359,9 @@ class ASRServer:
         self._result_writer = writer
 
         # 发送 handshake ready 消息
-        model_name = "mock" if self._mock else "qwen3-asr-0.6b"
         await self._emit_result({
             "type": "ready",
-            "model": model_name,
+            "model": self._asr.model_name,
             "vram_mb": self._asr.vram_mb,
             "proto_version": PROTO_VERSION,
         })

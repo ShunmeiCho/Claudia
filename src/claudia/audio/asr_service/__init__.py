@@ -1,5 +1,5 @@
-# Claudia ASR Service (Python 3.11)
-# Qwen3-ASR-0.6B inference + silero-vad
+# Claudia ASR Service (Python 3.8)
+# faster-whisper (CTranslate2) + silero-vad
 
 from .asr_server import ASRServer, ASRModelWrapper
 from .vad_processor import VADProcessor, VADConfig, VADState, VADEvent
