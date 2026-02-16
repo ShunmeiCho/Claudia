@@ -9,6 +9,21 @@ echo ""
 # 设置环境
 cd /home/m1ng/claudia
 
+# 统一 Python 解释器（避免 conda/base 环境缺依赖导致误回退到 Mock）
+# 可通过 CLAUDIA_PYTHON_BIN 覆盖
+PYTHON_BIN="${CLAUDIA_PYTHON_BIN:-/usr/bin/python3}"
+if [ ! -x "$PYTHON_BIN" ]; then
+    echo "❌ Python解释器不可用: $PYTHON_BIN"
+    exit 1
+fi
+
+# 注入 Unitree SDK2 Python 源码路径（兼容两个常见安装位置）
+for SDK_PATH in "/home/m1ng/claudia/unitree_sdk2_python" "/home/m1ng/unitree_sdk2_python"; do
+    if [ -d "$SDK_PATH" ] && [[ ":${PYTHONPATH:-}:" != *":$SDK_PATH:"* ]]; then
+        export PYTHONPATH="$SDK_PATH${PYTHONPATH:+:$PYTHONPATH}"
+    fi
+done
+
 # 配置CycloneDDS环境 - 关键！
 export CYCLONEDDS_HOME=/home/m1ng/claudia/cyclonedds/install
 export LD_LIBRARY_PATH=$CYCLONEDDS_HOME/lib:$LD_LIBRARY_PATH
@@ -23,6 +38,7 @@ echo "🔧 网络配置:"
 echo "   本机IP: $(ip addr show eth0 | grep '192.168.123' | awk '{print $2}' | cut -d'/' -f1)"
 echo "   机器人IP: 192.168.123.161 (Go2)"
 echo "   DDS配置: 使用eth0网络接口"
+echo "   Python: $PYTHON_BIN ($($PYTHON_BIN -V 2>&1))"
 echo ""
 
 # 注意: 不再 source setup_cyclonedds.sh（它使用 $HOME/cyclonedds/install，
@@ -56,13 +72,33 @@ case $choice in
         echo ""
         echo "✅ 启动模拟模式..."
         echo ""
-        python3 production_commander.py
+        # 软检查：ollama Python 包缺失时，Commander 会使用 HTTP API 兜底预热
+        if ! "$PYTHON_BIN" -c "import ollama" >/dev/null 2>&1; then
+            echo "⚠️ 未检测到Python ollama包，预热将走HTTP兜底"
+        fi
+        "$PYTHON_BIN" production_commander.py
         ;;
     2)
         echo ""
         echo "⚠️  真实硬件模式 - 请确保机器人已连接"
         read -p "确认继续? [y/N]: " confirm
         if [[ $confirm == [yY] ]]; then
+            # 硬件模式强依赖：缺失时直接失败，避免“名义硬件实际Mock”的误导状态
+            if ! "$PYTHON_BIN" -c "import unitree_sdk2py, cyclonedds.idl" >/dev/null 2>&1; then
+                echo ""
+                echo "❌ 硬件依赖导入失败（unitree_sdk2py / cyclonedds.idl）"
+                echo "   当前Python: $PYTHON_BIN"
+                echo "   PYTHONPATH: ${PYTHONPATH:-<empty>}"
+                echo ""
+                echo "建议修复步骤:"
+                echo "1) export PYTHONPATH=/home/m1ng/claudia/unitree_sdk2_python:\$PYTHONPATH"
+                echo "2) 检查CycloneDDS库路径: $CYCLONEDDS_HOME/lib"
+                echo "3) 重试导入: $PYTHON_BIN -c 'import unitree_sdk2py, cyclonedds.idl; print(\"OK\")'"
+                echo ""
+                echo "已停止启动，避免错误回退到 MockSportClient。"
+                exit 1
+            fi
+
             # 唤醒动画（起立→伸懒腰）— 默认关闭，需显式启用
             if [ -z "$COMMANDER_WAKEUP_ANIMATION" ]; then
                 read -p "启用唤醒动画（起立→伸懒腰）? [y/N]: " wakeup
@@ -73,7 +109,10 @@ case $choice in
             echo ""
             echo "✅ 启动真实硬件模式..."
             echo ""
-            python3 production_commander.py --hardware
+            if ! "$PYTHON_BIN" -c "import ollama" >/dev/null 2>&1; then
+                echo "⚠️ 未检测到Python ollama包，预热将走HTTP兜底"
+            fi
+            "$PYTHON_BIN" production_commander.py --hardware
         else
             echo "已取消"
         fi
