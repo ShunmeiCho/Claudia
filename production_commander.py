@@ -40,7 +40,14 @@ class ProductionCommander:
         print("🤖 Claudia Production Commander - LLM大脑实机测试")
         print("="*60)
         print(f"⚙️  模式: {'真实硬件' if self.brain.use_real_hardware else '模拟执行'}")
-        print(f"🧠 模型: {self.brain.model_7b}")
+        router_mode = self.brain._router_mode.value
+        if router_mode == "dual":
+            action_model = self.brain._channel_router._action_model
+            print("🧠 モデル: {} (dual: Action-primary)".format(action_model))
+        elif router_mode == "shadow":
+            print("🧠 モデル: {} + Action (shadow)".format(self.brain.model_7b))
+        else:
+            print("🧠 モデル: {}".format(self.brain.model_7b))
         print(f"⏰ 会话开始: {self.session_start.strftime('%Y-%m-%d %H:%M:%S')}")
         print("-"*60)
         print("💡 提示: 输入日语/中文/英文命令，输入 /help 查看帮助")
@@ -171,10 +178,9 @@ class ProductionCommander:
                 (model_name, 2048, "7B", 60),
             ]
         elif router_mode == "dual":
-            # Dual: action channel 先执行 → Action 最后预热
+            # Dual (Action-primary): 只需 Action 模型，不预热 7B
             action_model = self.brain._channel_router._action_model
             warmup_sequence = [
-                (model_name, 2048, "7B", 60),
                 (action_model, 1024, "Action", 30),
             ]
         else:
