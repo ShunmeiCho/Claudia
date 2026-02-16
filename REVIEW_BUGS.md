@@ -1,7 +1,8 @@
-# Claudia 项目代码审查报告
+# Claudia 项目代码审查报告 v2
 
-**审查日期**: 2026-02-16
-**审查范围**: 全项目源码、测试、配置、入口脚本
+**审查日期**: 2026-02-16（第二次审查）
+**审查范围**: main 分支 + feat/pr3-asr 分支全量（33 文件变更，+5302 / -329 行）
+**新增模块**: ASR 语音服务、Action-primary 双通道架构、v2.0/v2.1/v3.0 Modelfile
 
 ---
 
@@ -9,18 +10,28 @@
 
 | 严重度 | 数量 | 说明 |
 |--------|------|------|
-| **CRITICAL** | 4 | 命令注入、ROS2 类定义未守护、asyncio.Lock 初始化、审计日志竞态 |
-| **HIGH** | 5 | sport_client 空指针、元组解包无校验、异常静默吞没、集成测试引用失效模块、启动脚本硬编码路径 |
-| **MEDIUM** | 8 | 紧急指令标点遗漏、lru_cache 实例方法、电池值 NaN、日志轮转竞态、P50 计算偏差、main.py 未实现、输入校验缺失、测试覆盖缺口 |
-| **LOW** | 4 | asyncio API 废弃警告、.format() 风格不一致、文档与代码不同步、可选依赖缺失 |
+| **CRITICAL** | 5 | 命令注入(遗留)、json 缺失导入、asyncio+threading 锁混用、readexactly 资源泄漏、信号处理器不安全 |
+| **HIGH** | 7 | asyncio.Lock 初始化、审计单例竞态(遗留)、_result_writer 竞态、帧数据无校验、TTS 门控计时器泄漏、紧急关键词匹配不一致、硬编码路径 |
+| **MEDIUM** | 9 | 紧急命令标点(遗留)、lru_cache 实例方法(遗留)、JSON 结构无校验、环形缓冲区越界、重采样精度、VAD+Ring 死锁风险、P50 计算偏差、setup 脚本静默失败、exec() 使用 |
+| **LOW** | 5 | asyncio API 废弃、格式风格混用、文档不同步、魔法数 300、测试 mock 签名不一致 |
+
+### 上次审查修复状态
+
+| 编号 | 问题 | 状态 |
+|------|------|------|
+| C1 | shell=True 命令注入 | **❌ 未修复** |
+| C2 | ROS2 Node 类未守护 | **✅ 已修复** — `system_state_monitor.py:49` 添加 `Node = object` 占位 |
+| C3 | asyncio.Lock 在同步 __init__ | **❌ 未修复**（brain 中），ASR 模块中同样存在 |
+| C4 | 审计日志单例无线程锁 | **❌ 未修复** |
+| H5 | 启动脚本硬编码路径 | **⚠️ 部分修复** — Python 入口已改为相对路径，bash 脚本仍硬编码 |
 
 ---
 
 ## CRITICAL — 必须立即修复
 
-### C1. 命令注入漏洞 (`shell=True`)
+### C1. [遗留] 命令注入漏洞 (`shell=True`)
 
-**文件**: `src/claudia/brain/production_brain.py:723-748`
+**文件**: `src/claudia/brain/production_brain.py:725-744`
 
 ```python
 check_cmd = f"ollama list | grep {model.split(':')[0]}"
@@ -30,271 +41,272 @@ cmd = f'echo "{command}" | timeout {timeout} ollama run {model}'
 subprocess.run(cmd, shell=True, ...)
 ```
 
-**问题**: 用户输入 `command` 直接拼接到 shell 命令中，未做任何转义。攻击者可通过输入 `"; rm -rf / #` 或类似 payload 执行任意系统命令。
+**问题**: 用户输入 `command` 直接拼接到 shell 命令中。攻击者可通过输入 `"; rm -rf / #` 执行任意系统命令。`_call_ollama` 虽有 `@lru_cache` 且新代码主要走 `_call_ollama_v2`，但该方法仍可被调用。
 
-**修复建议**: 改用 `subprocess.run([...], shell=False)` 列表形式，或使用 `shlex.quote()` 转义参数。更好的方案是统一使用 `_call_ollama_v2`（ollama Python 库），彻底移除 subprocess 路径。
-
----
-
-### C2. ROS2 类定义未被 `ROS2_AVAILABLE` 守护
-
-**文件**: `src/claudia/robot_controller/system_state_monitor.py:584`
-
-```python
-# 第 25-47 行: try-except 导入 rclpy, Node 等，失败时 ROS2_AVAILABLE = False
-# 第 584 行: 无条件定义
-class SystemMonitorNode(Node):  # NameError: name 'Node' is not defined
-```
-
-**问题**: 当 ROS2 不可用时（如开发环境、CI），`Node` 未定义，导致整个模块导入失败。级联影响：
-- `led_state_machine.py` → 导入 `system_state_monitor` 失败
-- `robot_controller/__init__.py` → 导入 `led_state_machine` 失败
-- `production_brain.py` → 导入 `system_state_monitor` 失败
-- **最终 `production_commander.py` 无法启动**
-
-**修复建议**: 将 `SystemMonitorNode` 类定义包裹在 `if ROS2_AVAILABLE:` 守护中。
+**修复**: 改用 `subprocess.run([...], shell=False)` 或统一删除此方法，全部走 `_call_ollama_v2`。
 
 ---
 
-### C3. `asyncio.Lock()` 在同步 `__init__` 中创建
+### C2. [新] `production_commander.py` 缺少 `import json`
 
-**文件**: `src/claudia/brain/production_brain.py:284`
+**文件**: `production_commander.py:125`
 
 ```python
-self._command_lock = asyncio.Lock()
+# 第 1-13 行: 无 import json
+# 第 125 行:
+payload = json.dumps({...}).encode("utf-8")  # NameError: name 'json' is not defined
 ```
 
-**问题**: `asyncio.Lock()` 在 Python 3.10+ 中必须在运行中的事件循环内创建，否则抛出 `RuntimeError: no running event loop`。虽然 Python 3.8 容忍此写法，但属于反模式，且阻碍版本升级。
+**问题**: HTTP 兜底预热路径 `_sync_warmup_http()` 使用了 `json.dumps()`，但文件头未导入 `json` 模块。当 Python `ollama` 包不可用时（启动脚本已明确处理此场景），调用此函数会立即抛出 `NameError`，导致模型预热完全失败。
 
-**修复建议**: 改为懒初始化，或在首次 async 调用时创建 lock。
+**影响**: 生产环境中 Jetson 若缺少 `ollama` Python 包，**每次启动都会预热失败**，首条命令延迟 10-30 秒。
+
+**修复**: 在文件头添加 `import json`。
 
 ---
 
-### C4. 审计日志单例无线程安全保护
+### C3. [新] asyncio.Lock 与 threading.Lock 混用导致事件循环阻塞
 
-**文件**: `src/claudia/brain/audit_logger.py:182-191`
+**文件**: `src/claudia/audio/asr_service/asr_server.py:295,452` + `ring_buffer.py:39`
 
 ```python
-_global_audit_logger: Optional[AuditLogger] = None
+# ring_buffer.py:39 — 阻塞锁
+self._lock = threading.Lock()
 
-def get_audit_logger(log_dir: str = "logs/audit") -> AuditLogger:
-    global _global_audit_logger
-    if _global_audit_logger is None:           # <-- 竞态窗口
-        _global_audit_logger = AuditLogger(log_dir=log_dir)
-    return _global_audit_logger
+# asr_server.py:295 — 异步锁
+self._result_lock = asyncio.Lock()
+
+# asr_server.py:452 — 在 async 上下文直接调用阻塞操作
+self._ring.write(data)  # 内部获取 threading.Lock，阻塞事件循环
 ```
 
-**问题**: 多线程同时调用 `get_audit_logger()` 时，可能创建多个 AuditLogger 实例，后创建的覆盖先创建的，导致审计日志丢失。
+**问题**: `RingBuffer.write()` 内部获取 `threading.Lock()`（阻塞锁），但被直接从 async handler（`_handle_audio_connection`）调用，**未使用 `run_in_executor`**。这会阻塞整个 asyncio 事件循环，冻结心跳、结果发送、控制消息处理等所有并发操作。
 
-**修复建议**: 添加 `threading.Lock()` 保护单例创建。
+**影响**: 音频处理期间整个 ASR 服务无响应，心跳超时，客户端误判服务崩溃。
+
+**修复**: 将 `self._ring.write(data)` 和 VAD `process_frame()` 调用包裹在 `await loop.run_in_executor(None, ...)` 中。
+
+---
+
+### C4. [新] `readexactly()` 异常路径资源泄漏
+
+**文件**: `src/claudia/audio/asr_service/asr_server.py:447-469`
+
+```python
+data = await reader.readexactly(FRAME_BYTES)  # 447
+if not data:   # 448 — 死代码，readexactly 永不返回空
+    break
+
+except asyncio.IncompleteReadError:  # 464
+    logger.info("🎙️ Audio 流结束 (不完整帧)")
+    # ❌ 未关闭 writer — 对比 finally 块（468-469）只打印日志
+except (asyncio.CancelledError, ConnectionError):  # 466
+    pass
+finally:  # 468
+    logger.info("🎙️ Audio socket 客户端断开")
+    # ❌ writer 从未关闭！
+```
+
+**问题**:
+1. `readexactly()` 要么返回恰好 N 字节，要么抛 `IncompleteReadError`，**永不返回空**。第 448 行是死代码。
+2. `finally` 块仅打印日志，**未关闭 writer**。连接断开后 socket 资源泄漏，长时间运行后文件描述符耗尽。
+
+**修复**: 在 `finally` 中添加 `writer.close(); await writer.wait_closed()`。
+
+---
+
+### C5. [新] 信号处理器中不安全的 `asyncio.ensure_future()`
+
+**文件**: `src/claudia/audio/asr_service/asr_server.py:683`
+
+```python
+for sig in (signal.SIGTERM, signal.SIGINT):
+    loop.add_signal_handler(sig, lambda: asyncio.ensure_future(server.shutdown()))
+```
+
+**问题**: 信号处理器中调用 `asyncio.ensure_future()` 创建协程，但信号处理器的执行上下文特殊——可能中断正在执行的协程。此外 lambda 在循环中捕获 `server` 引用，若有变量重绑定风险。若 `shutdown()` 协程抛出异常，异常被静默丢弃（fire-and-forget）。
+
+**修复**: 改用 `loop.call_soon_threadsafe(lambda: asyncio.ensure_future(server.shutdown()))` 或直接设置 `self._running = False` 让主循环优雅退出。
 
 ---
 
 ## HIGH — 应在发布前修复
 
-### H1. `_rpc_call` 未校验 `sport_client` 是否为 None
+### H1. [遗留] asyncio.Lock() 在同步 `__init__` 中创建
 
-**文件**: `src/claudia/brain/production_brain.py:568`
+**文件**: `production_brain.py:286`, `asr_server.py:295`
+
+两处 `asyncio.Lock()` 都在同步 `__init__` 中创建。Python 3.10+ 严格要求在运行的事件循环中创建，否则 `RuntimeError`。
+
+---
+
+### H2. [遗留] 审计日志单例无线程安全保护
+
+**文件**: `audit_logger.py:182-191`
+
+多线程并发调用 `get_audit_logger()` 可创建多个实例，后者覆盖前者。
+
+---
+
+### H3. [新] `_result_writer` 赋值无锁保护
+
+**文件**: `asr_server.py:411`
 
 ```python
-method = getattr(self.sport_client, method_name)
+self._result_writer = writer  # 无锁
+await self._emit_result({...})  # _emit_result 内部获取 _result_lock
 ```
 
-**问题**: 模拟模式下 `self.sport_client` 可能为 None，此处未检查，导致 `AttributeError`。虽然调用方有 `if self.sport_client:` 守卫，但 `_rpc_call` 本身缺少防御性检查。
+赋值与 `_emit_result` 之间存在竞态窗口。其他协程可能在赋值后、首次 emit 前读取到部分初始化的 writer。
 
 ---
 
-### H2. 元组解包未做长度校验
+### H4. [新] VAD 帧数据无大小校验
 
-**文件**: `src/claudia/brain/production_brain.py:1823`
+**文件**: `vad_processor.py:233, 436`
 
 ```python
-state_code, _ = self._rpc_call("GetState", GETSTATE_FULL_KEYS, timeout_override=3.0)
+frame_ms = len(frame) // BYTES_PER_MS  # 不校验 frame 大小
+n_samples = len(frame) // 2  # 假设偶数长度
+samples = struct.unpack(f"<{n_samples}h", frame[:n_samples * 2])
 ```
 
-**对比**: 第 1687 行有正确的校验写法 `if isinstance(result, tuple) and len(result) >= 2:`，但 1823 行缺少校验，`_rpc_call` 返回非元组时会 crash。
+奇数长度 frame 或超大 frame 会导致计算错误或内存耗尽。
 
 ---
 
-### H3. 审计日志写入异常被静默吞没
+### H5. [新] TTS 门控计时器泄漏
 
-**文件**: `src/claudia/brain/audit_logger.py:99-100`
+**文件**: `asr_server.py:517-526`
 
-```python
-except Exception as e:
-    self.logger.error(f"审计日志写入失败: {e}")
-    # 不抛出，调用方无法得知写入失败
-```
-
-**问题**: 磁盘满、权限不足等严重错误被静默处理。对于安全相关的审计日志，静默失败意味着审计链断裂。调用方无法感知，也就无法降级或告警。
+快速连续收到多个 `tts_start` 消息时，虽然旧计时器被 cancel，但 `cancel()` 失败（如回调已入队）不会报错，新旧计时器可能同时触发。
 
 ---
 
-### H4. 集成测试引用不存在的模块
+### H6. [新] 紧急关键词匹配大小写不一致
 
-**文件**: `test/integration/test_interactive_japanese_commander.py:18`
+**文件**: `vad_processor.py:370-377`
 
-```python
-from src.claudia.interactive_japanese_commander import JapaneseCommandInterface
-```
-
-**问题**: `interactive_japanese_commander.py` 不存在于项目中。该测试文件中的全部 11 个测试用例无法执行，测试报告中呈现 import error 或 skip，产生虚假的覆盖率信心。
+输入文本被 `.lower()` 正规化，但 `_emergency_keywords` 列表中的关键词未正规化。日语关键词不受影响，但英文关键词（如大写 "STOP"）匹配逻辑依赖于列表中恰好是小写形式。
 
 ---
 
-### H5. 启动脚本硬编码绝对路径
+### H7. [部分修复] 启动脚本硬编码路径
 
-**文件**: `start_production_brain.sh:10`
+**文件**: `start_production_brain.sh:10,21,28` + `scripts/setup_asr_venv.sh:18,131`
 
-```bash
-cd /home/m1ng/claudia
-```
-
-**问题**: 限定为特定用户/路径，其他部署环境无法使用。
-
-**修复建议**: 改为 `cd "$(dirname "$0")"` 或 `cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"`。
+Python 入口 `production_commander.py:16` 已改为相对路径（✅），但 bash 脚本仍硬编码 `/home/m1ng/claudia`。
 
 ---
 
-## MEDIUM — 影响健壮性的问题
+## MEDIUM — 影响健壮性
 
-### M1. 紧急停止指令不处理标点变体
+### M1. [遗留] 紧急命令不处理标点变体
 
-**文件**: `src/claudia/brain/production_brain.py:649`
+**文件**: `production_brain.py:649` — "止まって！" 漏过紧急通道。
 
-```python
-cmd_lower = command.strip().lower()
-if cmd_lower in self.EMERGENCY_COMMANDS:
-```
+### M2. [遗留] `@lru_cache` 用在实例方法上
 
-**问题**: Hot cache（第 1302 行）会做 `.rstrip("!！?？。．、,")` 去除标点，但紧急检测路径没有。用户输入 "止まって！"（带感叹号）会漏过紧急通道。
+**文件**: `production_brain.py:720` — 实例被强引用，无法 GC。
 
----
+### M3. [新] JSON 控制消息无结构校验
 
-### M2. `@lru_cache` 用在实例方法上
+**文件**: `asr_server.py:486-493` — `json.loads()` 结果可能不是 dict，`msg.get()` 会 AttributeError。
 
-**文件**: `src/claudia/brain/production_brain.py:718`
+### M4. [新] RingBuffer `_read_tail` 无越界校验
 
-```python
-@lru_cache(maxsize=128)
-def _call_ollama(self, model, command, timeout=10):
-```
+**文件**: `ring_buffer.py:147` — `nbytes > capacity` 时返回错误数据。
 
-**问题**: `self` 作为 cache key 的一部分，导致：
-1. 缓存实际上是 per-instance 的（每个 ProductionBrain 实例独立缓存）
-2. ProductionBrain 实例被 lru_cache 强引用，无法被 GC 回收（内存泄漏）
+### M5. [新] 重采样索引精度丢失
 
----
+**文件**: `asr_server.py:77-78` — 整数除法精度丢失 + 未校验 `src_rate > 0`。
 
-### M3. 电池值 NaN 处理缺失
+### M6. [新] VAD + RingBuffer 在 async 上下文中死锁风险
 
-**文件**: `src/claudia/brain/production_brain.py:1224, 1238, 1270`
+**文件**: `vad_processor.py:244,353` — `read_last()` 获取 threading.Lock，与 C3 同源。
 
-```python
-state_snapshot.battery_level * 100 if state_snapshot.battery_level else 0
-```
+### M7. [遗留] P50 中位数计算偏差
 
-**问题**: `float('nan')` 的布尔值为 `True`，但 `NaN * 100 = NaN`，后续比较和显示都会出错。
+**文件**: `audit_logger.py:174` — 偶数列表中位数应取两值平均。
 
----
+### M8. [新] `setup_asr_venv.sh` pip 安装静默失败
 
-### M4. 日志轮转时间精度不足导致文件名冲突
+**文件**: `scripts/setup_asr_venv.sh:53,57,61,67` — `--quiet` 隐藏错误输出。
 
-**文件**: `src/claudia/brain/audit_logger.py:88-89`
+### M9. [新] `offline_route_comparison.py` 使用 `exec()` 加载脚本
 
-```python
-archive_name = self.current_log_file.with_suffix(
-    f".{datetime.now().strftime('%H%M%S')}.jsonl"
-)
-```
-
-**问题**: 仅精确到秒。同一秒内的两次轮转会产生相同文件名，第二次 `rename` 覆盖第一次的归档文件，导致审计数据丢失。
-
----
-
-### M5. P50 中位数计算偏差
-
-**文件**: `src/claudia/brain/audit_logger.py:174`
-
-```python
-"p50_latency_ms": latencies[len(latencies)//2] if latencies else 0,
-```
-
-**问题**: 偶数长度列表的中位数应取中间两个值的平均值。当前实现偏高 ~0.5 个索引位。
-
----
-
-### M6. `main.py` 入口点未实现
-
-**文件**: `src/claudia/main.py:34-50`
-
-`pyproject.toml` 注册了 `claudia = "claudia.main:main"` CLI 命令，但 `initialize_components()` 全是 TODO 注释，执行后无实际功能却报告"初始化完成"。
-
----
-
-### M7. `start_production_brain.sh` 输入校验不足
-
-**文件**: `start_production_brain.sh:36-38`
-
-模型创建命令无错误处理（`ollama create` 可能失败），Modelfile 路径 `models/ClaudiaAction_v1.0` 未验证是否存在，`ollama` 命令本身未验证是否可用。
-
----
-
-### M8. 核心模块测试覆盖缺口
-
-以下关键模块缺少单元测试：
-- `src/claudia/common/ros2_manager.py` — 环境变量设置、ROS2 初始化
-- `src/claudia/common/config.py` — YAML 加载、数据类更新
-- `src/claudia/common/logger.py` — 日志格式化、文件处理
-- `production_commander.py` — 命令行参数、启动流程、优雅退出
+**文件**: `scripts/offline_route_comparison.py:54-58` — 应改用 `importlib.util`。
 
 ---
 
 ## LOW — 可择期改善
 
-### L1. `asyncio.get_event_loop()` 已废弃
+### L1. `asyncio.ensure_future()` 废弃
 
-**文件**: `src/claudia/brain/production_brain.py:1026`
+**文件**: `asr_server.py:351,542,683` — 应改用 `asyncio.create_task()`。
 
-Python 3.10+ 中 `asyncio.get_event_loop()` 在非异步上下文调用时会发出 DeprecationWarning。应改用 `asyncio.get_running_loop()`。
+### L2. 日志格式混用
 
-### L2. 日志格式混用 `.format()` 和 f-string
-
-**文件**: `src/claudia/brain/production_brain.py` 全文
-
-同一文件中混用 `"... {}".format(x)` 和 `f"... {x}"`，风格不统一。
+**文件**: `production_brain.py` 全文 — `.format()` 和 f-string 混用。
 
 ### L3. CLAUDE.md 文档与代码不同步
 
-CLAUDE.md 中 "Actions requiring standing" 列表缺少 `1009 (Sit)` 和 `1033 (WiggleHips)`，而 `action_registry.py` 中这两个动作确实标记为 `requires_standing=True`。
+CLAUDE.md 的 standing 列表仍缺 `1009 (Sit)` 和 `1033 (WiggleHips)`。
 
-### L4. `pyproject.toml` 缺少运行时必需依赖
+### L4. VAD 能量检测魔法数
 
-`ollama`（LLM 推理必需）和 `unitree_sdk2_python`（机器人控制必需）未列入依赖项。`pip install -e .` 无法安装完整运行环境。
+**文件**: `vad_processor.py:439` — 硬编码阈值 `300` 应提取为常量。
+
+### L5. 测试 mock 签名不一致
+
+**文件**: `test/unit/test_channel_router.py:745-808` — 部分用显式参数，部分用 `**kwargs`。
 
 ---
 
-## 逻辑完整性评估
+## 新增 ASR 模块整体评估
 
-### 管道流程 ✅ 基本通顺
+### 架构设计 ✅ 合理
 
-5 阶段管道（Emergency → Safety Precheck → Hot Cache → Conversational → LLM）的优先级和 early-exit 逻辑正确。SafetyCompiler 作为安全门对所有路由模式生效（Invariant 1），不会被绕过。
+- 3 路 UDS (Audio / Control / Result) 分离清晰
+- VAD → ASR → 紧急关键词检测管道逻辑通顺
+- TTS 回声门控设计防止自激
+- IPC 协议有版本号和 handshake 机制
+- Mock 模式支持完善
 
-### 需要注意的逻辑风险
+### 主要风险
 
-1. **紧急命令与 hot_cache 重叠**: "stop" 同时出现在 `EMERGENCY_COMMANDS` 和 `hot_cache` 中。当前设计下紧急路径优先（正确），但修改 hot_cache 时易引入不一致。
-2. **Shadow 模式超时后 dual 结果仍可能写入日志**: 这是设计预期（`asyncio.shield`），但日志条目的时间戳可能滞后于返回结果。
-3. **`process_command()` 直接调用发出弃用警告**: 通过 `contextvars.ContextVar` 检测是否经由 `process_and_execute()` 调用，逻辑正确但调试时不直观。
+1. **async + threading 混用**是最大架构风险——RingBuffer 用 `threading.Lock`，但被 asyncio 事件循环直接调用。这不是某个方法的 bug，而是整个音频管道的设计问题。应该要么全部 async 化，要么将音频处理整体放入独立线程（通过 `run_in_executor`）。
+
+2. **Socket 资源管理不完整**——`_handle_audio_connection` 和 `_handle_ctrl_connection` 的 `finally` 块都未关闭 writer，长时间运行会泄漏文件描述符。
+
+3. **紧急关键词有两个数据源**——`emergency_keywords.py`（定义）和 `vad_processor.py:207`（硬编码兜底列表），可能不同步。
+
+---
+
+## Action-primary 架构评估
+
+### 路由逻辑 ✅ 基本正确
+
+- SafetyCompiler **不会被绕过**（Invariant 1 维持）：所有路径最终都经过 `safety_compiler.compile()`
+- `a + s` 同时出现时 sequence 优先（正确）
+- 序列校验先过滤无效码再截断（逻辑正确）
+
+### 注意事项
+
+1. **Dual fallback 审计路由标记**（`channel_router.py:211-214`）：Action channel 失败时 fallback 返回 `ROUTE_ACTION_FALLBACK`，审计链可能混淆。
+2. **Shadow 超时语义不一致**：内层 30s Ollama 超时 vs 外层 45s asyncio 超时，`_action_status` 不区分超时来源。
 
 ---
 
 ## 修复优先级建议
 
-| 优先级 | 编号 | 工作量 |
-|--------|------|--------|
-| 立即 | C1 命令注入 | 小 — 替换 shell=True |
-| 立即 | C2 ROS2 Node 守护 | 小 — 加 `if ROS2_AVAILABLE:` |
-| 立即 | C4 审计单例加锁 | 小 — 加 `threading.Lock()` |
-| 发布前 | H1-H5 | 中 — 逐个修复 |
-| 迭代中 | M1-M8 | 中 — 结合功能迭代处理 |
-| 择期 | L1-L4 | 小 — 代码质量改善 |
+| 优先级 | 编号 | 工作量 | 说明 |
+|--------|------|--------|------|
+| **立即** | C2 | 极小 | 加一行 `import json` |
+| **立即** | C3 | 中 | 将 ring.write + VAD 包裹在 run_in_executor |
+| **立即** | C4 | 小 | finally 中关闭 writer |
+| **立即** | C1 | 小 | 删除 `_call_ollama` 或移除 shell=True |
+| **立即** | C5 | 小 | 修改信号处理器模式 |
+| **发布前** | H1-H7 | 中 | 逐个修复 |
+| **迭代中** | M1-M9 | 中 | 结合功能迭代处理 |
+| **择期** | L1-L5 | 小 | 代码质量改善 |
