@@ -71,7 +71,7 @@ export BRAIN_MODEL_7B=claudia-7b:v2.0  # Override LLM model
 
 # PR2: Dual-channel routing
 export BRAIN_ROUTER_MODE=legacy   # "legacy" (default) | "dual" | "shadow"
-export BRAIN_MODEL_ACTION=claudia-action-v1  # Action channel model name
+export BRAIN_MODEL_ACTION=claudia-action-v3  # Action channel model name
 ```
 
 ## Architecture
@@ -112,7 +112,7 @@ execution_status: "success" | "unknown" | "failed" | "skipped"
 - **Atomic entry point**: `process_and_execute()` handles process + execute + status in one call. Direct `process_command()` calls emit deprecation warning via `contextvars.ContextVar`
 - **Dual-channel routing** (PR2): `ChannelRouter` in `channel_router.py` is **decision-only** — never executes or calls SafetyCompiler. Three modes via `BRAIN_ROUTER_MODE` env var (default: `legacy`)
 - **Single 7B model** (legacy): `claudia-7b:v2.0`, configurable via `BRAIN_MODEL_7B` env var
-- **Action model** (dual/shadow): `claudia-action-v1`, `num_predict=30`, `temperature=0.0`, outputs only `{"a":N}` or `{"s":[...]}` or `{"a":null}`
+- **Action model** (dual/shadow): `claudia-action-v3`, `num_predict=30`, `temperature=0.0`, outputs only `{"a":N}` or `{"s":[...]}` or `{"a":null}`
 - **Ollama JSON mode**: `format='json'` with `temperature=0.0` for deterministic output
 - **Graceful fallback chain**: Real SportClient → MockSportClient → simulation mode. Error 3103 (sport mode occupied by Unitree app) auto-falls back to mock.
 - **LRU cache on `_call_ollama`**: subprocess-based fallback path caches results
