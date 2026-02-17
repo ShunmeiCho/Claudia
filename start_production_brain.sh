@@ -48,10 +48,10 @@ echo ""
 # PR2: 检查并创建 Action 模型（仅在非 legacy 模式下需要）
 ROUTER_MODE="${BRAIN_ROUTER_MODE:-legacy}"
 if [ "$ROUTER_MODE" != "legacy" ]; then
-    ACTION_MODEL="${BRAIN_MODEL_ACTION:-claudia-action-v1}"
+    ACTION_MODEL="${BRAIN_MODEL_ACTION:-claudia-action-v3}"
     if ! ollama list 2>/dev/null | grep -q "$ACTION_MODEL"; then
         echo "📦 创建 Action 模型: $ACTION_MODEL ..."
-        ollama create "$ACTION_MODEL" -f models/ClaudiaAction_v1.0
+        ollama create "$ACTION_MODEL" -f models/ClaudiaAction_v3.0
         echo "✅ Action 模型已创建"
     else
         echo "✅ Action 模型已存在: $ACTION_MODEL"

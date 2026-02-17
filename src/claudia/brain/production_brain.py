@@ -16,7 +16,6 @@ import threading
 from typing import Dict, List, Optional, Tuple, Any, Union
 from dataclasses import dataclass, field
 from enum import Enum
-from functools import lru_cache
 
 # PR2: 协程安全的 process_and_execute 上下文标记
 # contextvars 确保每个 asyncio.Task 独立计数，不会并发串扰
@@ -647,7 +646,7 @@ class ProductionBrain:
         # contextvars 标记: 协程安全，不会并发串扰
         token = _pae_depth.set(_pae_depth.get(0) + 1)
         try:
-            cmd_lower = command.strip().lower()
+            cmd_lower = command.strip().lower().rstrip("！!。.、，,？?…~")
             if cmd_lower in self.EMERGENCY_COMMANDS:
                 return await self._handle_emergency(command)
 
@@ -717,67 +716,15 @@ class ProductionBrain:
         """判断是否为复杂指令"""
         return any(keyword in command for keyword in self.sequence_keywords)
     
-    @lru_cache(maxsize=128)
     def _call_ollama(self, model: str, command: str, timeout: int = 10) -> Optional[Dict]:
-        """调用Ollama模型"""
-        try:
-            # 首先检查模型是否存在
-            check_cmd = f"ollama list | grep {model.split(':')[0]}"
-            check_result = subprocess.run(
-                check_cmd,
-                shell=True,
-                capture_output=True,
-                text=True
-            )
-            
-            if model not in check_result.stdout:
-                self.logger.error(f"模型不存在: {model}")
-                # 尝试创建模型（v12.2统一使用7B modelfile）
-                if "v12" in model:
-                    create_cmd = f"ollama create {model} -f models/ClaudiaIntelligent_7B_v2.0"
-                    subprocess.run(create_cmd, shell=True, capture_output=True)
-                    self.logger.info(f"创建模型: {model}")
-                else:
-                    self.logger.warning(f"不支持的模型版本: {model}")
-                    return None
-            
-            cmd = f'echo "{command}" | timeout {timeout} ollama run {model}'
-            result = subprocess.run(
-                cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                encoding='utf-8'
-            )
-            
-            if result.returncode == 124:  # Timeout
-                self.logger.warning(f"模型超时: {model}")
-                return None
-            
-            # 解析JSON响应
-            if result.stdout:
-                response_text = result.stdout.strip()
-                try:
-                    # 尝试提取JSON对象
-                    if "{" in response_text and "}" in response_text:
-                        start_idx = response_text.find("{")
-                        end_idx = response_text.rfind("}")  # 使用rfind找最后一个}
-                        if start_idx != -1 and end_idx != -1:
-                            json_str = response_text[start_idx:end_idx+1]
-                            # 清理可能的特殊字符
-                            json_str = json_str.replace("\n", " ").replace("\r", "")
-                            return json.loads(json_str)
-                    # 如果没有JSON格式，尝试直接解析
-                    return json.loads(response_text)
-                except json.JSONDecodeError:
-                    self.logger.error(f"JSON解析失败: {response_text[:100]}...")  # 只显示前100字符
-                    return None
-            
-            return None
+        """遗留 subprocess 调用路径（已废弃）。
 
-        except Exception as e:
-            self.logger.error(f"Ollama调用错误: {e}")
-            return None
+        此方法仅在 ollama Python 包不可用时被 _call_ollama_v2 回调。
+        由于 shell=True 存在命令注入风险，现已移除实现，直接返回 None。
+        生产环境必须安装 ollama Python 包。
+        """
+        self.logger.error("ollama Python 包不可用，无法调用 LLM。请安装: pip install ollama")
+        return None
 
     def _normalize_battery(self, level):
         # type: (Optional[float]) -> Optional[float]
