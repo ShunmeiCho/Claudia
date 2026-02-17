@@ -431,6 +431,7 @@ class ASRServer:
             pass
         finally:
             logger.info("📡 Result socket 客户端断开")
+            writer.close()
             self._result_writer = None
 
     async def _handle_audio_connection(
@@ -440,16 +441,15 @@ class ASRServer:
     ) -> None:
         """Audio socket 连接处理: 接收 PCM 流 → ring buffer → VAD"""
         logger.info("🎙️ Audio socket 客户端已连接")
+        loop = asyncio.get_event_loop()
 
         try:
             while self._running:
                 # 读取一帧 PCM 数据 (30ms = 960 bytes)
                 data = await reader.readexactly(FRAME_BYTES)
-                if not data:
-                    break
 
                 # 写入环形缓冲区
-                self._ring.write(data)
+                await loop.run_in_executor(None, self._ring.write, data)
 
                 # TTS 回声门控: 播放期间不做 VAD
                 if self._tts_gate:
@@ -457,7 +457,7 @@ class ASRServer:
 
                 # VAD 处理
                 if self._vad:
-                    events = self._vad.process_frame(data)
+                    events = await loop.run_in_executor(None, self._vad.process_frame, data)
                     for event in events:
                         await self._handle_vad_event(event)
 
