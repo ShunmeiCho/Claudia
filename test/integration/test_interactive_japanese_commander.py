@@ -14,13 +14,19 @@ import unittest
 from unittest.mock import MagicMock
 
 # 在 import ProductionBrain 之前 mock 重量级依赖，避免 OOM
-# ollama: 避免加载 LLM 运行时
-sys.modules.setdefault('ollama', MagicMock())
-# cyclonedds: 避免 C 库 bad_alloc（DDS 网络初始化）
-for mod in ['cyclonedds', 'cyclonedds.core', 'cyclonedds.domain',
-            'cyclonedds.idl', 'cyclonedds.pub', 'cyclonedds.sub',
-            'cyclonedds._clayer']:
-    sys.modules.setdefault(mod, MagicMock())
+# conftest.py 已做同样的 mock，但直接运行时 conftest 不一定先加载
+for _mod in [
+    'ollama',
+    'cyclonedds', 'cyclonedds.core', 'cyclonedds.domain',
+    'cyclonedds.idl', 'cyclonedds.pub', 'cyclonedds.sub',
+    'cyclonedds._clayer',
+    'rclpy', 'rclpy.node', 'rclpy.executors', 'rclpy.qos',
+    'rclpy.callback_groups', 'rclpy.parameter',
+    'unitree_sdk2py', 'unitree_sdk2py.go2',
+    'unitree_sdk2py.go2.sport', 'unitree_sdk2py.go2.sport.sport_client',
+    'unitree_sdk2py.idl', 'unitree_sdk2py.rpc',
+]:
+    sys.modules.setdefault(_mod, MagicMock())
 
 
 class TestProductionBrainIntegration(unittest.TestCase):
@@ -40,6 +46,21 @@ class TestProductionBrainIntegration(unittest.TestCase):
         async def _mock_ensure(model, **kwargs):
             return True
         self.brain._ensure_model_loaded = _mock_ensure
+
+    def tearDown(self):
+        # 清理 state_monitor 防止资源累积（尤其在非 mock 环境下）
+        if hasattr(self.brain, 'state_monitor') and self.brain.state_monitor is not None:
+            if hasattr(self.brain.state_monitor, 'stop_monitoring'):
+                try:
+                    self.brain.state_monitor.stop_monitoring()
+                except Exception:
+                    pass
+            if hasattr(self.brain.state_monitor, 'stop_polling'):
+                try:
+                    self.brain.state_monitor.stop_polling()
+                except Exception:
+                    pass
+            self.brain.state_monitor = None
 
     def _run(self, coro):
         """同步执行异步协程"""
@@ -76,7 +97,9 @@ class TestProductionBrainIntegration(unittest.TestCase):
 
     def test_cache_sit(self):
         r = self._run(self.brain.process_and_execute("座って"))
-        self.assertEqual(r.api_code, 1009)
+        # 模拟模式: is_standing=False → SafetyCompiler 先插 StandUp(1004)
+        # 结果: api_code=None, sequence=[1004, 1009]
+        self.assertIn(1009, r.sequence or [r.api_code])
 
     def test_cache_stand(self):
         r = self._run(self.brain.process_and_execute("立って"))

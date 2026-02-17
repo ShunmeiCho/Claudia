@@ -345,9 +345,13 @@ class ProductionBrain:
             import sys
             import os
             
-            # 添加正确的路径
-            sys.path.append('/home/m1ng/claudia')
-            sys.path.append('/home/m1ng/claudia/unitree_sdk2_python')
+            # 添加正确的路径（从项目根目录推导，避免硬编码）
+            _project_root = os.path.abspath(os.path.join(
+                os.path.dirname(__file__), '..', '..', '..'))
+            sys.path.append(_project_root)
+            _sdk_path = os.path.join(_project_root, 'unitree_sdk2_python')
+            if os.path.isdir(_sdk_path):
+                sys.path.append(_sdk_path)
 
             # CycloneDDS 路径统一: 优先用环境变量，回退到项目目录
             # 解决 start_production_brain.sh 和 setup_cyclonedds.sh 路径不一致问题
@@ -355,7 +359,7 @@ class ProductionBrain:
             if not cyclone_home or not os.path.isdir(cyclone_home):
                 # 按优先级尝试两个已知路径
                 candidates = [
-                    '/home/m1ng/claudia/cyclonedds/install',
+                    os.path.join(_project_root, 'cyclonedds', 'install'),
                     os.path.expanduser('~/cyclonedds/install'),
                 ]
                 for candidate in candidates:
@@ -369,7 +373,7 @@ class ProductionBrain:
             # 设置LD_LIBRARY_PATH
             ld_path = os.environ.get('LD_LIBRARY_PATH', '')
             cyclone_lib = os.path.join(cyclone_home, 'lib')
-            unitree_lib = '/home/m1ng/claudia/cyclonedds_ws/install/unitree_sdk2/lib'
+            unitree_lib = os.path.join(_project_root, 'cyclonedds_ws', 'install', 'unitree_sdk2', 'lib')
             
             if cyclone_lib not in ld_path:
                 os.environ['LD_LIBRARY_PATH'] = f"{cyclone_lib}:{unitree_lib}:{ld_path}"
@@ -1196,7 +1200,8 @@ class ProductionBrain:
                 action_latency_ms=action_latency_ms,
                 voice_latency_ms=voice_latency_ms,
             )
-            self.audit_logger.log_entry(entry)
+            if not self.audit_logger.log_entry(entry):
+                self.logger.warning("⚠️ 审计日志写入失败 (route={})".format(route))
         except Exception as e:
             self.logger.warning(f"⚠️ 审计日志记录失败: {e}")
 

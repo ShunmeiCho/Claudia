@@ -6,8 +6,9 @@ echo "🤖 Claudia Production Brain Launcher"
 echo "=================================="
 echo ""
 
-# 设置环境
-cd /home/m1ng/claudia
+# 设置环境（从脚本位置推导项目根目录，避免硬编码）
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
 
 # 统一 Python 解释器（避免 conda/base 环境缺依赖导致误回退到 Mock）
 # 可通过 CLAUDIA_PYTHON_BIN 覆盖
@@ -18,14 +19,14 @@ if [ ! -x "$PYTHON_BIN" ]; then
 fi
 
 # 注入 Unitree SDK2 Python 源码路径（兼容两个常见安装位置）
-for SDK_PATH in "/home/m1ng/claudia/unitree_sdk2_python" "/home/m1ng/unitree_sdk2_python"; do
+for SDK_PATH in "$SCRIPT_DIR/unitree_sdk2_python" "$HOME/unitree_sdk2_python"; do
     if [ -d "$SDK_PATH" ] && [[ ":${PYTHONPATH:-}:" != *":$SDK_PATH:"* ]]; then
         export PYTHONPATH="$SDK_PATH${PYTHONPATH:+:$PYTHONPATH}"
     fi
 done
 
 # 配置CycloneDDS环境 - 关键！
-export CYCLONEDDS_HOME=/home/m1ng/claudia/cyclonedds/install
+export CYCLONEDDS_HOME="$SCRIPT_DIR/cyclonedds/install"
 export LD_LIBRARY_PATH=$CYCLONEDDS_HOME/lib:$LD_LIBRARY_PATH
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
@@ -91,7 +92,7 @@ case $choice in
                 echo "   PYTHONPATH: ${PYTHONPATH:-<empty>}"
                 echo ""
                 echo "建议修复步骤:"
-                echo "1) export PYTHONPATH=/home/m1ng/claudia/unitree_sdk2_python:\$PYTHONPATH"
+                echo "1) export PYTHONPATH=$SCRIPT_DIR/unitree_sdk2_python:\$PYTHONPATH"
                 echo "2) 检查CycloneDDS库路径: $CYCLONEDDS_HOME/lib"
                 echo "3) 重试导入: $PYTHON_BIN -c 'import unitree_sdk2py, cyclonedds.idl; print(\"OK\")'"
                 echo ""
