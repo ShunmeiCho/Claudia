@@ -50,6 +50,12 @@ def _make_brain():
     brain.last_posture_standing = False
     brain.EMERGENCY_COMMANDS = {}
     brain._generate_conversational_response = lambda cmd: "はい、何でしょうか？"
+
+    # _ensure_model_loaded は実際の Ollama API を呼ぶため、テストではモック化
+    async def _mock_ensure(model, **kwargs):
+        return True
+    brain._ensure_model_loaded = _mock_ensure
+
     return brain
 
 
@@ -152,7 +158,7 @@ class TestDualRoute:
         call_count = {"action": 0, "legacy": 0}
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v2.1":
+            if model == "claudia-action-v3":
                 call_count["action"] += 1
                 return {"a": 1009}
             else:
@@ -201,7 +207,7 @@ class TestDualRoute:
         router = ChannelRouter(brain, RouterMode.DUAL)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v2.1":
+            if model == "claudia-action-v3":
                 return None  # 超時
             else:
                 return {"r": "座ります", "a": 1009}
@@ -243,7 +249,7 @@ class TestDualRoute:
         router = ChannelRouter(brain, RouterMode.DUAL)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v2.1":
+            if model == "claudia-action-v3":
                 return {"s": [1004, 1016]}
             return None
 
@@ -269,7 +275,7 @@ class TestShadowRoute:
         router = ChannelRouter(brain, RouterMode.SHADOW)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v2.1":
+            if model == "claudia-action-v3":
                 return {"a": 1016}  # dual 选 hello
             else:
                 return {"r": "座ります", "a": 1009}  # legacy 选 sit
@@ -292,7 +298,7 @@ class TestShadowRoute:
         router = ChannelRouter(brain, RouterMode.SHADOW)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v2.1":
+            if model == "claudia-action-v3":
                 return {"a": 1016}
             else:
                 return {"r": "座ります", "a": 1009}
@@ -340,7 +346,7 @@ class TestShadowRoute:
         router = ChannelRouter(brain, RouterMode.SHADOW)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v2.1":
+            if model == "claudia-action-v3":
                 await asyncio.sleep(10)  # 超时
                 return {"a": 1009}
             else:
@@ -376,7 +382,7 @@ class TestShadowRoute:
         router = ChannelRouter(brain, RouterMode.SHADOW)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v2.1":
+            if model == "claudia-action-v3":
                 return None  # Ollama 内部超时
             else:
                 return {"r": "座ります", "a": 1009}
@@ -406,7 +412,7 @@ class TestShadowRoute:
         router = ChannelRouter(brain, RouterMode.SHADOW)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v2.1":
+            if model == "claudia-action-v3":
                 return {"a": 9999}  # 非法 api_code
             else:
                 return {"r": "やります", "a": None}
@@ -432,7 +438,7 @@ class TestShadowRoute:
         router = ChannelRouter(brain, RouterMode.SHADOW)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v2.1":
+            if model == "claudia-action-v3":
                 return {"a": 1009}  # 合法
             else:
                 return {"r": "座ります", "a": 1009}
@@ -462,7 +468,7 @@ class TestSafetyCompilerIntegration:
         brain._channel_router = ChannelRouter(brain, RouterMode.DUAL)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v2.1":
+            if model == "claudia-action-v3":
                 return {"a": 1030}  # FrontFlip（高风险）
             return {"r": "やります", "a": 1030}
 
@@ -565,7 +571,7 @@ class TestSequenceValidation:
         router = ChannelRouter(brain, RouterMode.DUAL)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v2.1":
+            if model == "claudia-action-v3":
                 return {"s": [1004, 1009]}  # 全部合法
             return None
 
@@ -584,7 +590,7 @@ class TestSequenceValidation:
         router = ChannelRouter(brain, RouterMode.DUAL)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v2.1":
+            if model == "claudia-action-v3":
                 return {"s": [1004, 9999, 1009]}  # 9999 非法
             return None
 
@@ -604,7 +610,7 @@ class TestSequenceValidation:
         router = ChannelRouter(brain, RouterMode.DUAL)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v2.1":
+            if model == "claudia-action-v3":
                 return {"s": [9999, 8888]}
             else:
                 return {"r": "座ります", "a": 1009}
@@ -628,7 +634,7 @@ class TestSequenceValidation:
         assert len(long_seq) > MAX_SEQUENCE_LENGTH
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v2.1":
+            if model == "claudia-action-v3":
                 return {"s": long_seq}
             return None
 
@@ -691,7 +697,7 @@ class TestShadowHighRiskDivergence:
         router = ChannelRouter(brain, RouterMode.SHADOW)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v2.1":
+            if model == "claudia-action-v3":
                 return {"a": 1009}  # dual: Sit（安全）
             else:
                 return {"r": "フリップ!", "a": 1030}  # legacy: FrontFlip（高风险）
@@ -713,7 +719,7 @@ class TestShadowHighRiskDivergence:
         router = ChannelRouter(brain, RouterMode.SHADOW)
 
         async def mock_ollama(model, command, timeout=10, **kwargs):
-            if model == "claudia-action-v2.1":
+            if model == "claudia-action-v3":
                 return {"a": 1009}  # Sit
             else:
                 return {"r": "立ちます", "a": 1004}  # StandUp
@@ -806,7 +812,7 @@ class TestActionSequenceConflict:
         async def mock_ollama(model, command, timeout=10,
                               num_predict=100, num_ctx=2048,
                               output_format='json'):
-            if model == "claudia-action-v2.1":
+            if model == "claudia-action-v3":
                 return {"a": 1009, "s": [1004, 1016]}  # 冲突!
             return {"r": "ok", "a": None}
 
@@ -832,7 +838,7 @@ class TestActionSequenceConflict:
         async def mock_ollama(model, command, timeout=10,
                               num_predict=100, num_ctx=2048,
                               output_format='json'):
-            if model == "claudia-action-v2.1":
+            if model == "claudia-action-v3":
                 return {"a": 1009}
             return {"r": "ok", "a": None}
 
@@ -861,7 +867,7 @@ class TestNoDoubleLegacyCall:
         async def mock_ollama(model, command, timeout=10,
                               num_predict=100, num_ctx=2048,
                               output_format='json'):
-            if model == "claudia-action-v2.1":
+            if model == "claudia-action-v3":
                 return None  # action 模型失败
             else:
                 call_count["legacy"] += 1
@@ -891,7 +897,7 @@ class TestNoDoubleLegacyCall:
                               num_predict=100, num_ctx=2048,
                               output_format='json'):
             call_count["total"] += 1
-            if model == "claudia-action-v2.1":
+            if model == "claudia-action-v3":
                 return {"a": None}  # 正常: 无动作
             else:
                 return {"r": "不应到达", "a": None}
@@ -917,7 +923,7 @@ class TestNoDoubleLegacyCall:
         async def mock_ollama(model, command, timeout=10,
                               num_predict=100, num_ctx=2048,
                               output_format='json'):
-            if model == "claudia-action-v2.1":
+            if model == "claudia-action-v3":
                 return {"a": 1009}  # 座る
             else:
                 call_count["legacy"] += 1
