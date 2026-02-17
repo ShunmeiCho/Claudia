@@ -431,6 +431,11 @@ class ASRServer:
             pass
         finally:
             logger.info("📡 Result socket 客户端断开")
+            if self._result_writer is not None:
+                try:
+                    self._result_writer.close()
+                except Exception:
+                    pass
             self._result_writer = None
 
     async def _handle_audio_connection(
@@ -445,8 +450,6 @@ class ASRServer:
             while self._running:
                 # 读取一帧 PCM 数据 (30ms = 960 bytes)
                 data = await reader.readexactly(FRAME_BYTES)
-                if not data:
-                    break
 
                 # 写入环形缓冲区
                 self._ring.write(data)
