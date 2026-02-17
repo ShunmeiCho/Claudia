@@ -408,7 +408,8 @@ class ASRServer:
     ) -> None:
         """Result socket 连接处理: 保存 writer 引用，发送 handshake"""
         logger.info("📡 Result socket 客户端已连接")
-        self._result_writer = writer
+        async with self._result_lock:
+            self._result_writer = writer
 
         # 发送 handshake ready 消息
         await self._emit_result({
@@ -432,7 +433,10 @@ class ASRServer:
         finally:
             logger.info("📡 Result socket 客户端断开")
             writer.close()
-            self._result_writer = None
+            async with self._result_lock:
+                # 只清空当前 writer，防止新连接的 writer 被误清
+                if self._result_writer is writer:
+                    self._result_writer = None
 
     async def _handle_audio_connection(
         self,
