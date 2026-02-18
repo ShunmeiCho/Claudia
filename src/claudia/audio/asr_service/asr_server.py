@@ -145,9 +145,9 @@ class ASRModelWrapper:
                 audio_int16 = resample_pcm_int16(audio_int16, sample_rate, SAMPLE_RATE)
             audio_np = audio_int16.astype(np.float32) / 32768.0
 
-            # beam_size=1 で推理高速化 (beam_size=3 比 ~40% 遅い)
-            # 短コマンド (1-3秒) では beam_size=1 でも十分な精度
-            beam = int(os.getenv("CLAUDIA_ASR_BEAM_SIZE", "1"))
+            # beam_size: 精度と速度のトレード
+            # beam=3(デフォルト): 精度優先、beam=1: 速度優先
+            beam = int(os.getenv("CLAUDIA_ASR_BEAM_SIZE", "3"))
             segments, info = self._model.transcribe(
                 audio_np,
                 language="ja",

@@ -152,7 +152,8 @@ class VoiceCommander:
         env = dict(os.environ)
         env["PYTHONPATH"] = src_dir + os.pathsep + env.get("PYTHONPATH", "")
 
-        # ASR モデル: 未指定なら small にアップグレード (base より大幅に高精度)
+        # ASR モデル: 未指定なら small (精度優先、CPU ~3-5s/utterance)
+        # 高速優先: CLAUDIA_ASR_MODEL=base python3 voice_commander.py
         if "CLAUDIA_ASR_MODEL" not in env:
             env["CLAUDIA_ASR_MODEL"] = "small"
 
@@ -354,34 +355,33 @@ class VoiceCommander:
             logger.debug("ctrl shutdown 送信失敗 (ASR 既に終了?): %s", e)
 
     async def _stop_asr_process(self) -> None:
-        """ASR サブプロセスを終了 (10s待ち → terminate → 5s → kill)"""
+        """ASR サブプロセスを終了 (3s待ち → terminate → 5s → kill)"""
         if not self._asr_process:
             return
 
-        if self._asr_process.returncode is not None:
+        if self._asr_process.returncode is None:
+            # まだ実行中 → 正常終了を待つ
+            try:
+                await asyncio.wait_for(self._asr_process.wait(), timeout=3.0)
+                logger.info("ASR プロセス正常終了")
+            except asyncio.TimeoutError:
+                # TERM → KILL エスカレーション
+                logger.warning("ASR プロセス TERM 送信")
+                try:
+                    self._asr_process.terminate()
+                    await asyncio.wait_for(self._asr_process.wait(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    logger.warning("ASR プロセス KILL 送信")
+                    self._asr_process.kill()
+                    await self._asr_process.wait()
+                except ProcessLookupError:
+                    pass
+        else:
             logger.info("ASR プロセス既に終了: code=%d", self._asr_process.returncode)
-            return
-
-        try:
-            await asyncio.wait_for(self._asr_process.wait(), timeout=3.0)
-            logger.info("ASR プロセス正常終了")
-            return
-        except asyncio.TimeoutError:
-            pass
-
-        logger.warning("ASR プロセス TERM 送信")
-        try:
-            self._asr_process.terminate()
-            await asyncio.wait_for(self._asr_process.wait(), timeout=5.0)
-        except asyncio.TimeoutError:
-            logger.warning("ASR プロセス KILL 送信")
-            self._asr_process.kill()
-            await self._asr_process.wait()
-        except ProcessLookupError:
-            pass
 
         # Python 3.8: subprocess transport を明示的に close し、
         # GC 時の "Event loop is closed" RuntimeError を防ぐ
+        # 全 return 経路で必ず実行される
         try:
             transport = self._asr_process._transport  # type: ignore[attr-defined]
             if transport is not None:

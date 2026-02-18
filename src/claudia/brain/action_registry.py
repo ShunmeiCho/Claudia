@@ -31,7 +31,8 @@ _ACTIONS = [
     ActionDef(1002, "BalanceStand",   "バランスします"),
     ActionDef(1003, "StopMove",       "止まります"),
     ActionDef(1004, "StandUp",        "立ちます"),
-    ActionDef(1005, "StandDown",      "伏せます"),
+    # StandDown は Standing からのみ実行可能 (Sit/Damp からは -1 で無視される)
+    ActionDef(1005, "StandDown",      "伏せます",    requires_standing=True),
     ActionDef(1006, "RecoveryStand",  "回復します"),
     # Sit 需要站立前置（策略约束）:
     # 在不可信状态下会自动前插 StandUp，避免从未知姿态直接执行 Sit。

@@ -327,11 +327,11 @@ class TestStandingPrerequisite:
         assert not v.auto_prepend
 
     def test_non_standing_action_no_prepend(self):
-        """不需要站立的动作 → 不前插"""
+        """不需要站立的动作 → 不前插 (例: RecoveryStand)"""
         sc = make_compiler()
-        assert 1005 not in REQUIRE_STANDING  # StandDown 不需站立
-        v = sc.compile([1005], battery_level=0.80, is_standing=False)
-        assert v.executable_sequence == [1005]
+        assert 1006 not in REQUIRE_STANDING  # RecoveryStand 不需站立
+        v = sc.compile([1006], battery_level=0.80, is_standing=False)
+        assert v.executable_sequence == [1006]
         assert not v.auto_prepend
 
     def test_sequence_single_prepend(self):
@@ -341,10 +341,17 @@ class TestStandingPrerequisite:
         assert v.executable_sequence.count(1004) == 1
         assert v.executable_sequence == [1004, 1016, 1017]
 
-    def test_standdown_no_prepend(self):
-        """StandDown(1005) 不需站立 → 不前插"""
+    def test_standdown_requires_standing_prepend(self):
+        """StandDown(1005) 需站立 → 非站立時自動前插 StandUp"""
         sc = make_compiler()
-        assert 1005 not in REQUIRE_STANDING
+        assert 1005 in REQUIRE_STANDING
+        v = sc.compile([1005], battery_level=0.80, is_standing=False)
+        assert v.executable_sequence == [1004, 1005]
+        assert 1004 in v.auto_prepend
+
+    def test_standdown_already_standing_no_prepend(self):
+        """StandDown(1005) 已站立 → 不前插"""
+        sc = make_compiler()
         v = sc.compile([1005], battery_level=0.80, is_standing=True)
         assert v.executable_sequence == [1005]
         assert not v.auto_prepend

@@ -29,7 +29,7 @@ logger = logging.getLogger("claudia.asr.bridge")
 
 # 設定定数
 QUEUE_MAXSIZE = 3
-MIN_CONFIDENCE = 0.4
+MIN_CONFIDENCE = 0.55
 DEDUP_TTL_S = 10.0
 HEARTBEAT_TIMEOUT_S = 15.0
 EMERGENCY_COOLDOWN_S = 0.5
