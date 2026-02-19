@@ -152,10 +152,11 @@ class VoiceCommander:
         env = dict(os.environ)
         env["PYTHONPATH"] = src_dir + os.pathsep + env.get("PYTHONPATH", "")
 
-        # ASR モデル: 未指定なら small (精度優先、CPU ~3-5s/utterance)
-        # 高速優先: CLAUDIA_ASR_MODEL=base python3 voice_commander.py
+        # ASR モデル: 未指定なら base (速度優先、CPU ~2-3s/utterance)
+        # small は精度+だが Jetson CPU 上で 5-8s かかり体感が悪い
+        # 高精度: CLAUDIA_ASR_MODEL=small python3 voice_commander.py
         if "CLAUDIA_ASR_MODEL" not in env:
-            env["CLAUDIA_ASR_MODEL"] = "small"
+            env["CLAUDIA_ASR_MODEL"] = "base"
 
         # mock フラグ
         cmd = [sys.executable, "-m", "claudia.audio.asr_service.asr_server"]

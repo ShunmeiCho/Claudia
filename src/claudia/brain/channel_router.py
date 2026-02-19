@@ -187,13 +187,13 @@ class ChannelRouter:
         return action_result
 
     async def _action_channel(self, command, request_id,
-                              allow_fallback=True, ollama_timeout=5):
+                              allow_fallback=True, ollama_timeout=10):
         # type: (str, str, bool, int) -> RouterResult
         """Action 通道: 调用 action model，只输出 {a:N} 或 {s:[...]} 或 {a:null}
 
         Fix #4: 校验 api_code 和 sequence 合法性
         allow_fallback: True=失败时回退 legacy（Dual 模式），False=直接返回失败结果（Shadow 观测用）
-        ollama_timeout: Ollama 调用超时（Dual=5s 紧凑，Shadow=15s 含 VRAM 换入）
+        ollama_timeout: Ollama 调用超时（Dual=10s Jetson GPU 推理余裕, Shadow=15s 含 VRAM 换入）
         """
         await self._brain._ensure_model_loaded(self._action_model, num_ctx=1024)
         t0 = time.monotonic()

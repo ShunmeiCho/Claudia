@@ -1330,17 +1330,28 @@ class ProductionBrain:
         # 旧预检基于文本关键词，而 SafetyCompiler 基于 api_code，更精确。
 
         # ===== 3) 热点缓存检查 → SafetyCompiler 统一安全编译 =====
-        # 三层归一化:
+        # 四层归一化:
         #   1) strip() 精确匹配
         #   2) 去除末尾常见标点 (!！?？。．、,)
         #   3) lower() 降级匹配（英文/混合输入）
+        #   4) 日语语法后缀剥离 (です/ます/ね/よ/ください/なさい)
+        #      ASR 常附加敬語，但 hot_cache キーは基本形
         cmd_stripped = command.strip()
         cmd_normalized = cmd_stripped.rstrip(self._TRAILING_PUNCTUATION)
         cmd_lower = cmd_normalized.lower()
+
+        # 日语语法后缀剥离 (从最长到最短，避免「ください」先被「い」误剥)
+        cmd_desuffixed = cmd_lower
+        for suffix in ('ください', 'なさい', 'です', 'ます', 'ね', 'よ'):
+            if cmd_desuffixed.endswith(suffix) and len(cmd_desuffixed) > len(suffix):
+                cmd_desuffixed = cmd_desuffixed[:-len(suffix)]
+                break
+
         cached = (
             self.hot_cache.get(cmd_stripped)
             or self.hot_cache.get(cmd_normalized)
             or self.hot_cache.get(cmd_lower)
+            or self.hot_cache.get(cmd_desuffixed)
         )
         if cached:
             self.logger.info("热点缓存命中: {}".format(command))
