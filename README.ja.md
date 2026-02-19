@@ -30,7 +30,7 @@
 
 ### ハードウェア制御
 - **15の検証済み動作**: 基本姿勢8 + パフォーマンス7 + 高度3（[対応動作](#対応動作)参照）
-- **リアルタイム制御**: 0ms（キャッシュ）〜約3秒（LLM推論）の応答時間
+- **リアルタイム制御**: 1ms（キャッシュ）〜約5秒（Jetson上LLM推論）の応答時間
 - **状態認識シーケンス**: 動作依存関係の自動解決
 - **グレースフルフォールバック**: 実機ハードウェア → モックシミュレーション
 
@@ -74,9 +74,14 @@ export PYTHONPATH=/path/to/unitree_sdk2_python:$PYTHONPATH
 # インタラクティブランチャー（推奨）
 ./start_production_brain.sh
 
-# 直接起動:
+# キーボードモード:
 python3 production_commander.py              # シミュレーションモード
 python3 production_commander.py --hardware   # 実機モード
+
+# 音声モード（Phase 2: USBマイク → ASR → LLM → ロボット）
+python3 voice_commander.py                   # 音声、シミュレーション
+python3 voice_commander.py --hardware        # 音声、実機
+python3 voice_commander.py --asr-mock        # 音声、モックASR（マイク不要）
 ```
 
 ---
@@ -146,26 +151,29 @@ Claudia> 量子力学について教えて → 会話応答（動作なし）
 1. 緊急バイパス .............. ハードコードされた停止コマンド、~0ms
   |
   v
-2. ホットキャッシュ .......... ~55件のキャッシュ済みコマンド→APIマッピング、~1ms
-  |                           （文化的表現、カナエイリアス、コア動作）
+2. ホットキャッシュ .......... 60+件のキャッシュ済みコマンド→APIマッピング、~1ms
+  |                           （文化的表現、カナエイリアス、サフィックス除去）
   v
 3. 会話検出 .................. 挨拶/質問 → テキストのみの応答
   |
   v
-4. LLM推論 .................. Qwen2.5-7B via Ollama、JSON出力、~2-3秒
+4. LLM推論（BRAIN_ROUTER_MODEでルーティング制御）:
+  |  - dual（デフォルト）: Actionモデル（~30トークン、Jetsonで3-5秒）
+  |  - legacy: 7Bモデル（フル応答＋アクションコード）
+  |  - shadow: 両チャネル、A/B比較ログ
+  v
+SafetyCompiler.compile() ...... ホワイトリスト→バッテリーゲート→起立前提
   |
   v
-5. SafetyCompiler.compile() .. ホワイトリスト→バッテリーゲート→起立前提
-  |
-  v
-6. 実行 ..................... SportClient RPC via CycloneDDS/DDS
+実行 ......................... SportClient RPC via CycloneDDS/DDS
 ```
 
 ### モジュール概要
 
 | モジュール | 責務 |
 |--------|------|
-| `brain/production_brain.py` | コアパイプライン: キャッシュ→LLM→安全→実行 |
+| `brain/production_brain.py` | コアパイプライン: キャッシュ→ルーター→安全→実行 |
+| `brain/channel_router.py` | デュアルチャネルLLMルーター（legacy/dual/shadowモード） |
 | `brain/action_registry.py` | 全動作定義の唯一の真実源 |
 | `brain/safety_compiler.py` | 統一安全パイプライン（バッテリー、起立、ホワイトリスト） |
 | `brain/audit_logger.py` | 構造化監査ログ (`logs/audit/`) |
@@ -174,52 +182,57 @@ Claudia> 量子力学について教えて → 会話応答（動作なし）
 | `brain/mock_sport_client.py` | テスト用SportClientシミュレーター |
 | `robot_controller/system_state_monitor.py` | ROS2ベースのバッテリー/姿勢監視（5Hz） |
 | `robot_controller/unified_led_controller.py` | LEDモードAPI（思考中/成功/エラー/リスニング） |
-| `production_commander.py` | インタラクティブREPLエントリーポイント |
+| `production_commander.py` | キーボードREPLエントリーポイント |
+| `voice_commander.py` | 音声モードエントリーポイント: ASRサブプロセス + AudioCapture + ASRBridge |
+| `audio/audio_capture.py` | USBマイク取得: arecordサブプロセス → リサンプル → UDS |
+| `audio/asr_bridge.py` | ASR結果コンシューマー: 重複排除/フィルター → Queue → Brain |
+| `audio/asr_service/` | ASRサーバー: faster-whisper + silero-vad + UDS |
 
 ---
 
 ## 音声認識 (ASR)
 
-> ステータス: **基盤準備完了** — カナ正規化パイプライン統合済み、プロバイダープロトコル設計済み。
+> ステータス: **Phase 2稼働中** — Jetson上でUSBマイクを使用した完全な音声パイプラインが稼働。
 
-### 現在の状態
+### 音声パイプライン
 
-入力は現在、インタラクティブREPL（`production_commander.py`）を介したテキストベースです。ただし、音声認識の基盤は整っています：
+```
+USBマイク (AT2020USB-XP, カード自動検出, 44100Hz)
+  │ arecordサブプロセス → リサンプル → 16kHz 960byteフレーム
+  v
+AudioCapture ──→ /tmp/claudia_audio.sock ──→ ASR Server（サブプロセス）
+                                                ├── silero-vad + 緊急検出
+                                                ├── faster-whisper base (ja, beam=1, CPU int8)
+                                                v
+ASRBridge ←── /tmp/claudia_asr_result.sock ←─── JSON Lines
+  ├── emergency → キューフラッシュ + クールダウン → brain呼び出し（ロックバイパス）
+  ├── transcript → 信頼度 ≥0.55 フィルター → 重複排除 → Queue(3)
+  └── command worker → brain.process_and_execute(text)
+```
+
+### ASR環境変数オーバーライド
+
+| 変数 | デフォルト | 選択肢 |
+|------|-----------|--------|
+| `CLAUDIA_ASR_MODEL` | `base` | `base` / `small` / `medium` |
+| `CLAUDIA_ASR_BEAM_SIZE` | `1`（貪欲デコード） | `1` / `3`+（ビームサーチ） |
+| `CLAUDIA_ASR_DEVICE` | `cpu` | `cpu` / `cuda` |
+
+### カナ正規化
 
 - **KANA_ALIASESパイプライン**: ホットキャッシュ層に統合済み。一般的なASRカナ出力を漢字表記に正規化（例：`おすわり` → `お座り`、`おて` → `お手`、`はーと` → `ハート`）。日本語音声コマンドにおけるASRミスマッチの最大の原因を排除。
+- **日本語サフィックス除去**: 丁寧語サフィックス（です/ます/ください）はホットキャッシュマッチング時に自動除去（例：`かわいいです` → `かわいい`）。
 - **緊急コマンドカナバリアント**: `EMERGENCY_COMMANDS`辞書にカナのみのバリアント（`とまれ`、`とめて`、`ていし`）を含み、不完全なASR転写でも緊急停止が確実に動作。
-
-### 計画アーキテクチャ (PR3)
-
-```
-マイクロフォン
-  |
-  v
-ウェイクワード検出 (pvporcupine)
-  |
-  v
-ASRプロバイダー（プラグイン可能）
-  |  - Google Speech-to-Text
-  |  - OpenAI Whisper（ローカル、Jetson最適化）
-  |  - VOSK（完全オフライン）
-  v
-カナ正規化（統合済み）
-  |
-  v
-ProductionBrain.process_command()
-```
-
-`ASRProvider`抽象基底クラスが、頭脳やコマンダー層を変更せずにASRエンジンを交換できる標準インターフェースを定義します。ASRは**コマンダー層**で動作し、転写テキストを頭脳に供給します。
 
 ---
 
 ## テキスト読み上げ (TTS)
 
-> ステータス: **設計完了** — アーキテクチャ定義済み、PR3での実装を予定。
+> ステータス: **エコーゲーティング実装済み** — ASRサーバーにTTSエコーゲーティング（ctrlソケット経由のtts_start/tts_end）を実装済み。TTSプロバイダー統合は未実装。
 
 ### 現在の状態
 
-応答は現在REPLにテキストとして表示されます。ロボットは日本語で応答します（`_sanitize_response()`がひらがな/カタカナ/漢字の存在を検証）。
+応答は現在REPLにテキストとして表示されます。ロボットは日本語で応答します（`_sanitize_response()`がひらがな/カタカナ/漢字の存在を検証）。ASRサーバーはTTS再生中の認識をミュートするエコーゲーティングを実装しています。
 
 ### 計画アーキテクチャ (PR3)
 
@@ -298,6 +311,9 @@ mypy src/
 | LLMタイムアウト | モデル未読み込み | `ollama list`を実行、`curl localhost:11434/api/tags`をチェック |
 | インポートエラー | PYTHONPATHの不足 | `export PYTHONPATH=/path/to/unitree_sdk2_python:$PYTHONPATH` |
 | エラー3104 | RPCタイムアウト（非同期動作） | ロボットがまだ実行中の可能性あり。接続性を確認 |
+| Actionチャネル10秒タイムアウト | Jetson GPUコールドスタート | アイドル後の最初のコマンドは正常。モデルは自動的にウォームアップ |
+| `(聴取中)`だが認識なし | マイクミュート/ゲイン不足 | マイクゲインを確認、テスト: `arecord -D hw:X,0 -d 3 /tmp/t.raw` |
+| ASR遅い（>5秒/発話） | CPUでwhisper-small使用 | base（デフォルト）を使用: `CLAUDIA_ASR_MODEL=base` |
 
 ---
 
@@ -306,8 +322,8 @@ mypy src/
 | フェーズ | 内容 | ステータス |
 |:---:|---|:---:|
 | PR1 | SafetyCompiler + action_registry + P0安全修正 | 完了 |
-| PR2 | デュアルチャネルLLM（アクション+音声分離） | 計画中 |
-| PR3 | ASR/TTS統合（プロバイダープロトコル） | 設計済み |
+| PR2 | デュアルチャネルLLMルーティング（アクション+音声分離） | 完了 |
+| PR3 | ASR/TTS統合 | Phase 2完了（ASR）、TTS未実装 |
 | P2 | パラメーター化動作（Move, Euler, SpeedLevel） | 将来 |
 | P2 | 3Bアクションチャネル A/Bテスト | 将来 |
 
@@ -324,4 +340,4 @@ MIT License — 詳細は[LICENSE](LICENSE)を参照。
 
 ---
 
-*最終更新: 2026-02-11*
+*最終更新: 2026-02-19*

@@ -30,7 +30,7 @@
 
 ### 硬件控制
 - **15 个验证动作**：8 个基础姿态 + 7 个表演 + 3 个高级（参见[支持的动作](#支持的动作)）
-- **实时控制**：0ms（缓存命中）到约 3 秒（LLM 推理）的响应时间
+- **实时控制**：1ms（缓存命中）到约 5 秒（Jetson 上 LLM 推理）的响应时间
 - **状态感知序列**：自动解决动作依赖关系
 - **优雅降级**：真实硬件 → 模拟仿真，带结构化错误码
 
@@ -74,9 +74,14 @@ export PYTHONPATH=/path/to/unitree_sdk2_python:$PYTHONPATH
 # 交互式启动器（推荐）
 ./start_production_brain.sh
 
-# 或直接启动：
+# 键盘模式：
 python3 production_commander.py              # 模拟模式
 python3 production_commander.py --hardware   # 真实硬件模式
+
+# 语音模式（Phase 2：USB 麦克风 → ASR → LLM → 机器人）
+python3 voice_commander.py                   # 语音，模拟模式
+python3 voice_commander.py --hardware        # 语音，真实硬件
+python3 voice_commander.py --asr-mock        # 语音，模拟 ASR（无需麦克风）
 ```
 
 ---
@@ -146,26 +151,29 @@ Claudia> 量子力学について教えて → 对话回复（无动作）
 1. 紧急绕过 ................. 硬编码停止命令，~0ms
   |
   v
-2. 热缓存 .................. ~55 条缓存命令→API 映射，~1ms
-  |                          （文化表达、假名别名、核心动作）
+2. 热缓存 .................. 60+ 条缓存命令→API 映射，~1ms
+  |                          （文化表达、假名别名、后缀剥离）
   v
 3. 对话检测 ................. 问候/提问 → 纯文本回复
   |
   v
-4. LLM 推理 ................. Qwen2.5-7B via Ollama，JSON 输出，~2-3 秒
+4. LLM 推理（BRAIN_ROUTER_MODE 控制路由）：
+  |  - dual（默认）：Action 模型（~30 tokens，Jetson 上 3-5 秒）
+  |  - legacy：7B 模型（完整回复 + 动作码）
+  |  - shadow：双通道，A/B 对比日志
+  v
+SafetyCompiler.compile() ..... 白名单→电量门控→站立前置
   |
   v
-5. SafetyCompiler.compile() .. 白名单→电量门控→站立前置
-  |
-  v
-6. 执行 ..................... SportClient RPC via CycloneDDS/DDS
+执行 ......................... SportClient RPC via CycloneDDS/DDS
 ```
 
 ### 模块概览
 
 | 模块 | 职责 |
 |--------|------|
-| `brain/production_brain.py` | 核心管线：缓存→LLM→安全→执行 |
+| `brain/production_brain.py` | 核心管线：缓存→路由→安全→执行 |
+| `brain/channel_router.py` | 双通道 LLM 路由器（legacy/dual/shadow 模式） |
 | `brain/action_registry.py` | 所有动作定义的单一真源 |
 | `brain/safety_compiler.py` | 统一安全管线（电量、站立、白名单） |
 | `brain/audit_logger.py` | 结构化审计日志 (`logs/audit/`) |
@@ -174,52 +182,57 @@ Claudia> 量子力学について教えて → 对话回复（无动作）
 | `brain/mock_sport_client.py` | 测试用 SportClient 模拟器 |
 | `robot_controller/system_state_monitor.py` | 基于 ROS2 的电量/姿态监控（5Hz） |
 | `robot_controller/unified_led_controller.py` | LED 模式 API（思考中/成功/错误/监听） |
-| `production_commander.py` | 交互式 REPL 入口 |
+| `production_commander.py` | 键盘 REPL 入口 |
+| `voice_commander.py` | 语音模式入口：ASR 子进程 + AudioCapture + ASRBridge |
+| `audio/audio_capture.py` | USB 麦克风采集：arecord 子进程 → 重采样 → UDS |
+| `audio/asr_bridge.py` | ASR 结果消费者：去重/过滤 → Queue → Brain |
+| `audio/asr_service/` | ASR 服务器：faster-whisper + silero-vad + UDS |
 
 ---
 
 ## 语音识别 (ASR)
 
-> 状态：**基础就绪** —— 假名正规化管线已集成，Provider 协议已设计。
+> 状态：**Phase 2 已上线** —— 完整语音管线已在 Jetson 上通过 USB 麦克风运行。
 
-### 当前状态
+### 语音管线
 
-输入目前通过交互式 REPL（`production_commander.py`）进行文本输入。不过，语音识别的基础已经就位：
+```
+USB 麦克风 (AT2020USB-XP, 自动检测声卡, 44100Hz)
+  │ arecord 子进程 → 重采样 → 16kHz 960byte 帧
+  v
+AudioCapture ──→ /tmp/claudia_audio.sock ──→ ASR Server（子进程）
+                                                ├── silero-vad + 紧急检测
+                                                ├── faster-whisper base (ja, beam=1, CPU int8)
+                                                v
+ASRBridge ←── /tmp/claudia_asr_result.sock ←─── JSON Lines
+  ├── emergency → 队列清空 + 冷却 → brain 调用（绕过锁）
+  ├── transcript → 置信度 ≥0.55 过滤 → 去重 → Queue(3)
+  └── command worker → brain.process_and_execute(text)
+```
+
+### ASR 环境变量
+
+| 变量 | 默认值 | 选项 |
+|------|--------|------|
+| `CLAUDIA_ASR_MODEL` | `base` | `base` / `small` / `medium` |
+| `CLAUDIA_ASR_BEAM_SIZE` | `1`（贪心解码） | `1` / `3`+（束搜索） |
+| `CLAUDIA_ASR_DEVICE` | `cpu` | `cpu` / `cuda` |
+
+### 假名正规化
 
 - **KANA_ALIASES 管线**：已集成到热缓存层。将常见的 ASR 假名输出正规化为汉字（例如：`おすわり` → `お座り`、`おて` → `お手`、`はーと` → `ハート`）。消除了日语语音命令中 ASR 不匹配的首要原因。
+- **日语后缀剥离**：敬语后缀（です/ます/ください）在热缓存匹配时自动剥离（例如：`かわいいです` → `かわいい`）。
 - **紧急命令假名变体**：`EMERGENCY_COMMANDS` 字典包含纯假名变体（`とまれ`、`とめて`、`ていし`），确保即使 ASR 转写不完美也能可靠执行紧急停止。
-
-### 规划架构 (PR3)
-
-```
-麦克风
-  |
-  v
-唤醒词检测 (pvporcupine)
-  |
-  v
-ASR Provider（可插拔）
-  |  - Google Speech-to-Text
-  |  - OpenAI Whisper（本地，Jetson 优化）
-  |  - VOSK（完全离线）
-  v
-假名正规化（已集成）
-  |
-  v
-ProductionBrain.process_command()
-```
-
-`ASRProvider` 抽象基类定义了标准接口，可以在不修改大脑层或命令器层的情况下更换 ASR 引擎。ASR 运行在**命令器层**，将转写文本输入大脑。
 
 ---
 
 ## 文本转语音 (TTS)
 
-> 状态：**已设计** —— 架构已定义，计划在 PR3 实现。
+> 状态：**回声门控已实现** —— ASR 服务器中已实现 TTS 回声门控（通过 ctrl socket 的 tts_start/tts_end）；TTS Provider 集成待完成。
 
 ### 当前状态
 
-回复目前在 REPL 中以文本形式显示。机器人用日语回复（由 `_sanitize_response()` 验证平假名/片假名/汉字的存在来确保）。
+回复目前在 REPL 中以文本形式显示。机器人用日语回复（由 `_sanitize_response()` 验证平假名/片假名/汉字的存在来确保）。ASR 服务器实现了回声门控，在 TTS 播放期间静音识别。
 
 ### 规划架构 (PR3)
 
@@ -298,6 +311,9 @@ mypy src/
 | LLM 超时 | 模型未加载 | 运行 `ollama list`，检查 `curl localhost:11434/api/tags` |
 | 导入错误 | 缺少 PYTHONPATH | `export PYTHONPATH=/path/to/unitree_sdk2_python:$PYTHONPATH` |
 | 错误 3104 | RPC 超时（异步动作） | 机器人可能仍在执行中，请检查连通性 |
+| Action 通道 10 秒超时 | Jetson GPU 冷启动 | 空闲后首条命令正常现象；模型会自动预热 |
+| `(聴取中)` 但无识别 | 麦克风静音/增益过低 | 检查麦克风增益，测试：`arecord -D hw:X,0 -d 3 /tmp/t.raw` |
+| ASR 慢（>5 秒/句） | CPU 上使用 whisper-small | 使用 base（默认）：`CLAUDIA_ASR_MODEL=base` |
 
 ---
 
@@ -306,8 +322,8 @@ mypy src/
 | 阶段 | 内容 | 状态 |
 |:---:|---|:---:|
 | PR1 | SafetyCompiler + action_registry + P0 安全修复 | 完成 |
-| PR2 | 双通道 LLM（动作+语音分离） | 计划中 |
-| PR3 | ASR/TTS 集成（Provider 协议） | 已设计 |
+| PR2 | 双通道 LLM 路由（动作+语音分离） | 完成 |
+| PR3 | ASR/TTS 集成 | Phase 2 完成（ASR），TTS 待实现 |
 | P2 | 参数化动作（Move, Euler, SpeedLevel） | 未来 |
 | P2 | 3B 动作通道 A/B 测试 | 未来 |
 
@@ -324,4 +340,4 @@ MIT License — 详见 [LICENSE](LICENSE)。
 
 ---
 
-*最后更新：2026-02-11*
+*最后更新：2026-02-19*

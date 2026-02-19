@@ -30,7 +30,7 @@
 
 ### Hardware Control
 - **15 Validated Actions**: 8 basic postures + 4 performance + 3 advanced (see [Supported Actions](#supported-actions))
-- **Real-Time Control**: 0ms (cached) to ~3s (LLM inference) response time
+- **Real-Time Control**: 1ms (cached) to ~5s (LLM on Jetson) response time
 - **State-Aware Sequencing**: Automatic action dependency resolution
 - **Graceful Fallback**: Real hardware → Mock simulation, with structured error codes
 
@@ -74,9 +74,14 @@ export PYTHONPATH=/path/to/unitree_sdk2_python:$PYTHONPATH
 # Interactive launcher (recommended)
 ./start_production_brain.sh
 
-# Or directly:
+# Keyboard mode:
 python3 production_commander.py              # Simulation mode
 python3 production_commander.py --hardware   # Real robot
+
+# Voice mode (Phase 2: USB mic → ASR → LLM → robot)
+python3 voice_commander.py                   # Voice, simulation
+python3 voice_commander.py --hardware        # Voice, real robot
+python3 voice_commander.py --asr-mock        # Voice, mock ASR (no mic)
 ```
 
 ---
@@ -146,26 +151,29 @@ User Input (JA/ZH/EN)
 1. Emergency Bypass ........... hardcoded stop commands, ~0ms
   |
   v
-2. Hot Cache .................. ~55 cached command->API mappings, ~1ms
-  |                            (cultural terms, kana aliases, core actions)
+2. Hot Cache .................. 60+ cached command→API mappings, ~1ms
+  |                            (cultural terms, kana aliases, suffix stripping)
   v
-3. Conversational Detection ... greetings/questions -> text-only response
+3. Conversational Detection ... greetings/questions → text-only response
   |
   v
-4. LLM Inference .............. Qwen2.5-7B via Ollama, JSON output, ~2-3s
+4. LLM Inference (BRAIN_ROUTER_MODE controls routing):
+  |  - dual (default): Action model (~30 tokens, 3-5s on Jetson)
+  |  - legacy: 7B model (full response + action code)
+  |  - shadow: both channels, A/B comparison logging
+  v
+SafetyCompiler.compile() ...... whitelist → battery gate → standing prereq
   |
   v
-5. SafetyCompiler.compile() ... whitelist -> battery gate -> standing prereq
-  |
-  v
-6. Execute .................... SportClient RPC via CycloneDDS/DDS
+Execute ....................... SportClient RPC via CycloneDDS/DDS
 ```
 
 ### Module Overview
 
 | Module | Responsibility |
 |--------|---------------|
-| `brain/production_brain.py` | Core pipeline: cache -> LLM -> safety -> execution |
+| `brain/production_brain.py` | Core pipeline: cache → router → safety → execution |
+| `brain/channel_router.py` | Dual-channel LLM router (legacy/dual/shadow modes) |
 | `brain/action_registry.py` | Single source of truth for all action definitions |
 | `brain/safety_compiler.py` | Unified safety pipeline (battery, standing, whitelist) |
 | `brain/audit_logger.py` | Structured audit trail (`logs/audit/`) |
@@ -174,52 +182,57 @@ User Input (JA/ZH/EN)
 | `brain/mock_sport_client.py` | Simulates SportClient for testing |
 | `robot_controller/system_state_monitor.py` | ROS2-based battery/posture monitoring at 5Hz |
 | `robot_controller/unified_led_controller.py` | LED mode API (thinking/success/error/listening) |
-| `production_commander.py` | Interactive REPL entry point |
+| `production_commander.py` | Keyboard REPL entry point |
+| `voice_commander.py` | Voice mode entry point: ASR subprocess + AudioCapture + ASRBridge |
+| `audio/audio_capture.py` | USB mic capture: arecord subprocess → resample → UDS |
+| `audio/asr_bridge.py` | ASR result consumer: dedup/filter → Queue → Brain |
+| `audio/asr_service/` | ASR server: faster-whisper + silero-vad + UDS |
 
 ---
 
 ## Speech Recognition (ASR)
 
-> Status: **Foundation Ready** — KANA normalization pipeline integrated, provider protocol planned.
+> Status: **Phase 2 Operational** — Full voice pipeline running on Jetson with USB microphone.
 
-### Current State
+### Voice Pipeline
 
-Input is currently text-based via the interactive REPL (`production_commander.py`). However, the groundwork for speech recognition is in place:
+```
+USB Mic (AT2020USB-XP, auto-detect card, 44100Hz)
+  │ arecord subprocess → resample → 16kHz 960byte frames
+  v
+AudioCapture ──→ /tmp/claudia_audio.sock ──→ ASR Server (subprocess)
+                                                ├── silero-vad + emergency detection
+                                                ├── faster-whisper base (ja, beam=1, CPU int8)
+                                                v
+ASRBridge ←── /tmp/claudia_asr_result.sock ←─── JSON Lines
+  ├── emergency → queue flush + cooldown → brain call (bypass lock)
+  ├── transcript → confidence ≥0.55 filter → dedup → Queue(3)
+  └── command worker → brain.process_and_execute(text)
+```
 
-- **KANA_ALIASES Pipeline**: Integrated into the hot cache layer. Normalizes common ASR kana outputs to their kanji equivalents (e.g., `おすわり` → `お座り`, `おて` → `お手`, `はーと` → `ハート`). This eliminates the #1 source of ASR mismatches with Japanese voice commands.
+### ASR Environment Overrides
+
+| Variable | Default | Options |
+|----------|---------|---------|
+| `CLAUDIA_ASR_MODEL` | `base` | `base` / `small` / `medium` |
+| `CLAUDIA_ASR_BEAM_SIZE` | `1` (greedy) | `1` / `3`+ (beam search) |
+| `CLAUDIA_ASR_DEVICE` | `cpu` | `cpu` / `cuda` |
+
+### KANA Normalization
+
+- **KANA_ALIASES Pipeline**: Integrated into the hot cache layer. Normalizes common ASR kana outputs to their kanji equivalents (e.g., `おすわり` → `お座り`, `おて` → `お手`, `はーと` → `ハート`). Eliminates the #1 source of ASR mismatches with Japanese voice commands.
+- **Japanese Suffix Stripping**: Polite suffixes (です/ます/ください) are automatically stripped for hot cache matching (e.g., `かわいいです` → `かわいい`).
 - **Emergency Command Kana Variants**: `EMERGENCY_COMMANDS` dictionary includes kana-only variants (`とまれ`, `とめて`, `ていし`) ensuring emergency stops work even with imperfect ASR transcription.
-
-### Planned Architecture (PR3)
-
-```
-Microphone
-  |
-  v
-Wake Word Detection (pvporcupine)
-  |
-  v
-ASR Provider (pluggable)
-  |  - Google Speech-to-Text
-  |  - OpenAI Whisper (local, Jetson-optimized)
-  |  - VOSK (fully offline)
-  v
-KANA Normalization (already integrated)
-  |
-  v
-ProductionBrain.process_command()
-```
-
-The `ASRProvider` abstract base class defines a standard interface for swapping ASR engines without modifying the brain or commander layers. ASR runs in the **commander layer**, feeding transcribed text to the brain.
 
 ---
 
 ## Text-to-Speech (TTS)
 
-> Status: **Designed** — Architecture defined, implementation planned for PR3.
+> Status: **Echo Gating Implemented** — TTS echo gating (tts_start/tts_end via ctrl socket) is implemented in asr_server.py; TTS provider integration pending.
 
 ### Current State
 
-Responses are currently displayed as text in the REPL. The robot responds in Japanese (enforced by `_sanitize_response()` which validates hiragana/katakana/kanji presence).
+Responses are currently displayed as text in the REPL. The robot responds in Japanese (enforced by `_sanitize_response()` which validates hiragana/katakana/kanji presence). The ASR server implements echo gating to mute recognition during TTS playback.
 
 ### Planned Architecture (PR3)
 
@@ -306,6 +319,9 @@ curl http://localhost:11434/api/tags         # Ollama health check
 | LLM timeout | Model not loaded | Run `ollama list`, check `curl localhost:11434/api/tags` |
 | Import error (unitree_sdk2py) | Missing PYTHONPATH | `export PYTHONPATH=/path/to/unitree_sdk2_python:$PYTHONPATH` |
 | Error 3104 | RPC timeout (async action) | Robot may still be executing; check connectivity |
+| Action channel 10s timeout | Jetson GPU cold start | First command after idle; model re-warms automatically |
+| `(聴取中)` but no recognition | Mic mute/low gain | Check mic gain, test: `arecord -D hw:X,0 -d 3 /tmp/t.raw` |
+| ASR slow (>5s/utterance) | whisper-small on CPU | Use base (default): `CLAUDIA_ASR_MODEL=base` |
 
 ---
 
@@ -314,8 +330,8 @@ curl http://localhost:11434/api/tags         # Ollama health check
 | Phase | Description | Status |
 |-------|-------------|--------|
 | PR1 | SafetyCompiler + action_registry + P0 safety fixes | Done |
-| PR2 | Dual-channel LLM (action + voice separation) | Planned |
-| PR3 | ASR/TTS integration (provider protocols) | Designed |
+| PR2 | Dual-channel LLM routing (action + voice separation) | Done |
+| PR3 | ASR/TTS integration | Phase 2 Done (ASR), TTS Pending |
 | P2 | Parameterized actions (Move, Euler, SpeedLevel) | Future |
 | P2 | 3B action-channel A/B testing | Future |
 
@@ -332,4 +348,4 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
-*Last updated: 2026-02-11*
+*Last updated: 2026-02-19*
