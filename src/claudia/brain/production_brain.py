@@ -330,6 +330,8 @@ class ProductionBrain:
             handler.setFormatter(formatter)
             logger.addHandler(handler)
             logger.setLevel(logging.INFO)
+        # 自身 handler で完結させ root handler との二重出力を防止
+        logger.propagate = False
         return logger
 
     def _kana_to_kanji(self, text):

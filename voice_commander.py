@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import signal
 import sys
 import time
@@ -35,6 +36,89 @@ from claudia.audio.asr_service.ipc_protocol import ASR_CTRL_SOCKET, connect_uds,
 
 logger = logging.getLogger("claudia.voice")
 
+# ASR stderr からメッセージ部分を抽出する正規表現
+# 例: "2026-02-19 15:31:03 [claudia.asr.server] INFO: 実際のメッセージ"
+#   → "実際のメッセージ"
+_ASR_LOG_LEVELS = ["INFO", "WARNING", "ERROR", "DEBUG", "CRITICAL"]
+_ASR_LEVEL_PAT = "(?:" + "|".join(_ASR_LOG_LEVELS) + ")"
+_ASR_LOG_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+"     # timestamp
+    r"\[[\w.]+\]\s+"                                    # [logger.name]
+    + _ASR_LEVEL_PAT + r":\s*"                          # LEVEL:
+    r"(.+)$"                                            # message
+)
+
+# フェーズ表示の幅定数
+_PHASE_WIDTH = 48
+
+
+class _QuietFilter(logging.Filter):
+    """起動フェーズ中にログを抑制するフィルター
+
+    ERROR 以上のみ通す。WARNING (GetState 探測失敗等) は
+    Go2 の既知動作であり phase サマリーで十分。
+    """
+
+    def filter(self, record):
+        return record.levelno >= logging.ERROR
+
+
+def _phase_start(step, total, label):
+    """フェーズ開始行を表示 (改行なし)、開始時刻を返す"""
+    prefix = "  [{}/{}] {}".format(step, total, label)
+    dots = "." * (_PHASE_WIDTH - len(prefix) - 1)
+    print("{} {}".format(prefix, dots), end="", flush=True)
+    return time.time()
+
+
+def _phase_ok(start_time):
+    """フェーズ完了を追記"""
+    elapsed = time.time() - start_time
+    print(" OK ({:.1f}s)".format(elapsed))
+
+
+def _phase_ok_detail(start_time, detail):
+    """フェーズ完了 + 補足情報を追記"""
+    elapsed = time.time() - start_time
+    print(" OK ({:.1f}s)".format(elapsed))
+    print("        {}".format(detail))
+
+
+def _phase_fail(msg):
+    """フェーズ失敗を追記"""
+    print(" FAIL")
+    print("        {}".format(msg))
+
+
+def _display_width(text):
+    """テキストの端末表示幅を計算 (CJK 全角文字を 2 カラムとして扱う)"""
+    w = 0
+    for ch in text:
+        cp = ord(ch)
+        # CJK Unified Ideographs, Hiragana, Katakana, Fullwidth forms
+        if (0x3000 <= cp <= 0x9FFF
+                or 0xF900 <= cp <= 0xFAFF
+                or 0xFF01 <= cp <= 0xFF60):
+            w += 2
+        else:
+            w += 1
+    return w
+
+
+def _box_header(lines):
+    """ボックス罫線ヘッダーを生成 (CJK 幅対応)"""
+    inner = 44  # | + space + content + space + |
+    parts = []
+    parts.append("  +{}+".format("-" * (inner + 2)))
+    for line in lines:
+        dw = _display_width(line)
+        pad = inner - dw
+        if pad < 0:
+            pad = 0
+        parts.append("  | {}{} |".format(line, " " * pad))
+    parts.append("  +{}+".format("-" * (inner + 2)))
+    return "\n".join(parts)
+
 
 class VoiceCommander:
     """音声コマンダー — ASR + LLM + ロボット実行を統合
@@ -51,6 +135,7 @@ class VoiceCommander:
     ) -> None:
         self._use_real_hardware = use_real_hardware
         self._asr_mock = asr_mock
+        self._startup_phase = True  # ASR stderr drain 抑制フラグ
         self._brain: Optional[ProductionBrain] = None
         self._asr_process: Optional[asyncio.subprocess.Process] = None
         self._bridge: Optional[ASRBridge] = None
@@ -69,11 +154,31 @@ class VoiceCommander:
         """メインエントリ: 起動 → 監視 → 終了"""
         self._print_header()
 
+        # 起動フェーズ中のログを抑制 (ERROR 以上のみ通す)
+        # Brain: logger 級 (handler は __init__ 内生成)
+        # Root: handler 級 (propagate 経由を捕捉)
+        quiet = _QuietFilter()
+        brain_logger = logging.getLogger("ProductionBrain")
+        brain_logger.addFilter(quiet)
+        _suppressed_handlers = []
+        for h in logging.getLogger().handlers:
+            h.addFilter(quiet)
+            _suppressed_handlers.append(h)
+
         try:
             await self._startup()
-            print("\n{} Listening... (Ctrl+C で終了)\n".format(
-                "🎙️" if not self._asr_mock else "🧪"))
+            icon = "mic" if not self._asr_mock else "mock"
+            print("\n  [{}] Listening... (Ctrl+C で終了)\n".format(icon))
 
+            # AudioCapture 初期接続ログを吸収するため短時間待機後に解除
+            await asyncio.sleep(0.5)
+        finally:
+            brain_logger.removeFilter(quiet)
+            for h in _suppressed_handlers:
+                h.removeFilter(quiet)
+            self._startup_phase = False
+
+        try:
             # ASR プロセス死活監視 + シグナル待ちを並行
             asr_monitor = asyncio.ensure_future(self._monitor_asr_process())
             done, _ = await asyncio.wait(
@@ -82,15 +187,15 @@ class VoiceCommander:
             )
             # monitor が先に完了 = ASR クラッシュ
             if asr_monitor in done and not self._shutdown_event.is_set():
-                print("\n❌ ASR サーバーが予期せず終了しました")
+                print("\n  [error] ASR サーバーが予期せず終了しました")
                 logger.error("ASR プロセスが予期せず終了 — シャットダウン開始")
 
         except KeyboardInterrupt:
-            print("\n\n⚠️ Ctrl+C 検出、シャットダウン中...")
+            print("\n\n  Ctrl+C 検出、シャットダウン中...")
 
         except Exception as e:
             logger.error("VoiceCommander エラー: %s", e, exc_info=True)
-            print("\n❌ エラー: {}".format(e))
+            print("\n  [error] {}".format(e))
 
         finally:
             await self._shutdown()
@@ -100,38 +205,60 @@ class VoiceCommander:
     # ------------------------------------------------------------------
 
     async def _startup(self) -> None:
-        """起動: Brain → LLM 予熱 → ASR → Bridge(ready待ち) → AudioCapture"""
+        """起動: Brain → LLM 予熱 → ASR → Bridge(ready待ち) → AudioCapture
+
+        ログ抑制は run() 側で管理 (Listening 表示後に解除するため)。
+        """
+        total = 5
+        print()
+
         # 1. ProductionBrain 作成
-        print("🧠 ProductionBrain 初期化中...")
+        t = _phase_start(1, total, "Brain")
         self._brain = ProductionBrain(use_real_hardware=self._use_real_hardware)
 
+        hw = "実機" if self._use_real_hardware else "sim"
+        mode = self._brain._router_mode.value
+        detail = "{} / {}".format(hw, mode)
+        try:
+            if self._brain.state_monitor:
+                batt = self._brain.state_monitor.battery_level
+                if batt is not None:
+                    detail += " / battery {}%".format(batt)
+        except Exception:
+            pass
+        _phase_ok_detail(t, detail)
+
         # 2. LLM 予熱
-        await self._warmup_model()
+        t = _phase_start(2, total, "LLM warmup")
+        await self._warmup_model(quiet=True)
+        _phase_ok(t)
 
         # 3. ASR サブプロセス起動
+        t = _phase_start(3, total, "ASR server")
         await self._start_asr_process()
+        _phase_ok(t)
 
         # 4. ASRBridge 起動 + ready 待ち
-        print("🔗 ASRBridge 接続中...")
+        t = _phase_start(4, total, "ASR bridge")
         self._bridge = ASRBridge(
             brain=self._brain,
             on_result=self._display_result,
         )
         await self._bridge.start()
 
-        # ready ハンドシェイク待ち (ASR モデル読込に時間がかかる場合がある)
         try:
             await asyncio.wait_for(self._bridge.ready_event.wait(), timeout=90)
-            print("✅ ASR サーバー準備完了")
+            _phase_ok(t)
         except asyncio.TimeoutError:
-            print("❌ ASR ready タイムアウト (90s) — ASR サーバーが起動できません")
+            _phase_fail("ready タイムアウト (90s)")
             raise RuntimeError("ASR サーバー ready タイムアウト")
 
         # 5. AudioCapture 起動
-        print("🎙️ AudioCapture 起動中...")
+        t = _phase_start(5, total, "Mic capture")
         self._capture = AudioCapture(mock=self._asr_mock)
         self._capture_task = asyncio.ensure_future(self._capture.run())
         self._capture_task.add_done_callback(self._on_capture_done)
+        _phase_ok(t)
 
         # シグナルハンドラ登録
         loop = asyncio.get_event_loop()
@@ -163,16 +290,12 @@ class VoiceCommander:
 
     async def _start_asr_process(self) -> None:
         """ASR サーバーをサブプロセスとして起動 (-m モジュール方式)"""
-        print("🚀 ASR サーバー起動中...")
-
         # PYTHONPATH 前置追加
         src_dir = os.path.join(_PROJECT_ROOT, "src")
         env = dict(os.environ)
         env["PYTHONPATH"] = src_dir + os.pathsep + env.get("PYTHONPATH", "")
 
         # ASR モデル: 未指定なら base (速度優先、CPU ~2-3s/utterance)
-        # small は精度+だが Jetson CPU 上で 5-8s かかり体感が悪い
-        # 高精度: CLAUDIA_ASR_MODEL=small python3 voice_commander.py
         if "CLAUDIA_ASR_MODEL" not in env:
             env["CLAUDIA_ASR_MODEL"] = "base"
 
@@ -196,10 +319,13 @@ class VoiceCommander:
         )
 
     async def _drain_stderr(self, stream: asyncio.StreamReader) -> None:
-        """ASR stderr を読み取り logger に転送
+        """ASR stderr を読み取り、二重フォーマットを排除して表示
 
-        ERROR/WARNING/Traceback 行は warning レベルで表示し、
-        ASR サーバーのクラッシュ原因を可視化する。
+        ASR サブプロセスの stderr は既にフォーマット済み
+        (例: "2026-02-19 15:31:03 [claudia.asr.server] INFO: message")。
+        正規表現でメッセージ部分のみ抽出し、print で直接出力する。
+        ERROR/WARNING 含有行は [ASR!] プレフィックスで強調表示。
+        起動フェーズ中は WARNING 以上のみ表示。
         """
         _error_indicators = ("error", "exception", "traceback", "critical",
                              "fatal", "segfault", "sigabrt", "killed")
@@ -211,11 +337,22 @@ class VoiceCommander:
                 text = line.decode("utf-8", errors="replace").rstrip()
                 if not text:
                     continue
+
+                # フォーマット済みログからメッセージ部分を抽出
+                m = _ASR_LOG_RE.match(text)
+                msg = m.group(1) if m else text
+
                 text_lower = text.lower()
-                if any(ind in text_lower for ind in _error_indicators):
-                    logger.warning("[ASR] %s", text)
+                is_error = any(ind in text_lower for ind in _error_indicators)
+
+                # 起動フェーズ中は WARNING 以上のみ通す
+                if self._startup_phase and not is_error:
+                    continue
+
+                if is_error:
+                    print("  [ASR!] {}".format(msg), flush=True)
                 else:
-                    logger.info("[ASR] %s", text)
+                    print("  [ASR] {}".format(msg), flush=True)
         except asyncio.CancelledError:
             pass
         except Exception as e:
@@ -225,9 +362,12 @@ class VoiceCommander:
     # LLM 予熱 (production_commander.py から移植)
     # ------------------------------------------------------------------
 
-    async def _warmup_model(self) -> None:
-        """LLM モデルをGPUに予熱ロード"""
-        print("🔄 LLM 予熱中...")
+    async def _warmup_model(self, quiet: bool = False) -> None:
+        """LLM モデルをGPUに予熱ロード
+
+        Args:
+            quiet: True でフェーズ進捗のサブ出力を抑制
+        """
         model_name = self._brain.model_7b
 
         def _sync_warmup_http(model, num_ctx):
@@ -263,7 +403,7 @@ class VoiceCommander:
 
             sync_warmup_fn = _sync_warmup_ollama
         except ImportError:
-            print("ℹ️ ollama パッケージ未検出、HTTP API 予熱")
+            pass
 
         loop = asyncio.get_event_loop()
         router_mode = self._brain._router_mode.value
@@ -287,17 +427,16 @@ class VoiceCommander:
 
         for model, num_ctx, label, timeout_s in warmup_sequence:
             try:
-                start = time.time()
                 await asyncio.wait_for(
                     loop.run_in_executor(None, sync_warmup_fn, model, num_ctx),
                     timeout=timeout_s,
                 )
-                elapsed = (time.time() - start) * 1000
-                print("✅ {} 予熱完了 ({}: {:.0f}ms)".format(label, model, elapsed))
             except asyncio.TimeoutError:
-                print("⚠️ {} 予熱タイムアウト ({}s)".format(label, timeout_s))
+                if not quiet:
+                    print("  [warn] {} warmup timeout ({}s)".format(label, timeout_s))
             except Exception as e:
-                print("⚠️ {} 予熱失敗: {}".format(label, e))
+                if not quiet:
+                    print("  [warn] {} warmup failed: {}".format(label, e))
 
     # ------------------------------------------------------------------
     # 結果表示
@@ -309,34 +448,33 @@ class VoiceCommander:
             print("  ... (聴取中)", end="", flush=True)
             return
         elif event_type == "emergency":
-            print("\n🚨 Emergency: '{}'".format(text))
+            print("\n  >>> EMERGENCY: '{}'".format(text))
         elif event_type == "transcript":
-            print("\n🎤 認識: '{}' (conf={:.2f})".format(text, data))
+            print("\n  mic> '{}' (conf={:.2f})".format(text, data))
         elif event_type == "e2e_timing":
-            # E2E タイミング表示 (result の直後に呼ばれる)
             timing = data
             asr = timing.get("asr_ms", 0)
             brain = timing.get("brain_ms", 0)
             e2e = timing.get("e2e_ms", 0)
-            print("⏱️  E2E: {:.0f}ms (ASR={:.0f}ms + Brain={:.0f}ms)".format(
+            print("  time: {:.0f}ms (ASR={:.0f} + Brain={:.0f})".format(
                 e2e, asr, brain))
         elif event_type == "result":
             self._command_count += 1
             result = data
-            print("─" * 40)
-            print("💬 応答: {}".format(result.response))
+            print("  " + "-" * 38)
+            print("  res> {}".format(result.response))
             if result.api_code:
-                print("🔧 API: {}".format(result.api_code))
+                print("  api: {}".format(result.api_code))
             if result.sequence:
-                print("📋 シーケンス: {}".format(result.sequence))
+                print("  seq: {}".format(result.sequence))
             status = result.execution_status
             if status == "success":
-                print("✅ 実行成功")
+                print("  [ok]")
             elif status == "unknown":
-                print("⚠️ タイムアウト (実行中の可能性)")
+                print("  [timeout] (実行中の可能性)")
             elif status == "failed":
-                print("❌ 実行失敗")
-            print("─" * 40)
+                print("  [failed]")
+            print("  " + "-" * 38)
 
     # ------------------------------------------------------------------
     # シャットダウン
@@ -344,7 +482,7 @@ class VoiceCommander:
 
     async def _shutdown(self) -> None:
         """優雅なシャットダウン: Capture → ctrl shutdown → Bridge → ASR 終了"""
-        print("\n🛑 シャットダウン中...")
+        print("\n  shutting down...")
 
         # 1. AudioCapture 停止
         if self._capture:
@@ -376,7 +514,7 @@ class VoiceCommander:
                 pass
 
         runtime = datetime.now() - self._session_start
-        print("\n✅ セッション終了 (コマンド: {}件, 時間: {:.0f}s)".format(
+        print("  session: {} commands, {:.0f}s\n".format(
             self._command_count, runtime.total_seconds()))
 
     async def _send_ctrl_shutdown(self) -> None:
@@ -419,8 +557,6 @@ class VoiceCommander:
 
         # Python 3.8: subprocess transport + pipe transport を明示的に close し、
         # GC 時の "Event loop is closed" RuntimeError を防ぐ
-        # stderr=PIPE で作成された ReadTransport も close しないと
-        # __del__ → call_soon → "Event loop is closed" が発生する
         try:
             transport = self._asr_process._transport  # type: ignore[attr-defined]
             if transport is not None:
@@ -445,17 +581,20 @@ class VoiceCommander:
 
     def _print_header(self) -> None:
         """ヘッダー表示"""
-        print("\n" + "=" * 60)
-        print("🎙️ Claudia Voice Commander — 音声対話モード")
-        print("=" * 60)
-        hw = "実機" if self._use_real_hardware else "シミュレーション"
+        hw = "実機" if self._use_real_hardware else "sim"
         asr = "mock" if self._asr_mock else "production"
-        print("⚙️  モード: {} / ASR: {}".format(hw, asr))
-        print("⏰ セッション: {}".format(self._session_start.strftime("%Y-%m-%d %H:%M:%S")))
-        print("-" * 60)
-        print("💡 日本語で話しかけてください (例: お手, 座って, 踊って)")
-        print("💡 緊急停止: 止まれ / stop / 停止")
-        print("-" * 60)
+        ts = self._session_start.strftime("%Y-%m-%d %H:%M:%S")
+
+        print()
+        print(_box_header([
+            "Claudia Voice Commander",
+            "{} / ASR {} ".format(hw, asr),
+            ts,
+        ]))
+        print()
+        print("  話しかけてください (例: お手, 座って, 踊って)")
+        print("  緊急停止: 止まれ / stop / 停止")
+        print("  Ctrl+C で終了")
 
 
 # ======================================================================
@@ -470,6 +609,8 @@ def _setup_logging() -> None:
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+    # httpx の HTTP リクエストログは常に不要
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 def _parse_args() -> argparse.Namespace:

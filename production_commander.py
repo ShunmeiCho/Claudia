@@ -7,6 +7,7 @@ Production Commander - 生产环境交互式命令器
 
 import asyncio
 import json
+import logging
 import time
 import sys
 import os
@@ -20,90 +21,163 @@ sys.path.append(os.path.join(_PROJECT_ROOT, 'src'))
 
 from claudia.brain.production_brain import ProductionBrain, BrainOutput
 
+# フェーズ表示の幅定数
+_PHASE_WIDTH = 48
+
+
+class _QuietFilter(logging.Filter):
+    """起動フェーズ中にログを抑制 (ERROR 以上のみ通す)"""
+
+    def filter(self, record):
+        return record.levelno >= logging.ERROR
+
+
+def _phase_start(step, total, label):
+    """フェーズ開始行を表示 (改行なし)、開始時刻を返す"""
+    prefix = "  [{}/{}] {}".format(step, total, label)
+    dots = "." * (_PHASE_WIDTH - len(prefix) - 1)
+    print("{} {}".format(prefix, dots), end="", flush=True)
+    return time.time()
+
+
+def _phase_ok(start_time):
+    """フェーズ完了を追記"""
+    elapsed = time.time() - start_time
+    print(" OK ({:.1f}s)".format(elapsed))
+
+
+def _phase_ok_detail(start_time, detail):
+    """フェーズ完了 + 補足情報を追記"""
+    elapsed = time.time() - start_time
+    print(" OK ({:.1f}s)".format(elapsed))
+    print("        {}".format(detail))
+
+
+def _display_width(text):
+    """テキストの端末表示幅を計算 (CJK 全角文字を 2 カラムとして扱う)"""
+    w = 0
+    for ch in text:
+        cp = ord(ch)
+        if (0x3000 <= cp <= 0x9FFF
+                or 0xF900 <= cp <= 0xFAFF
+                or 0xFF01 <= cp <= 0xFF60):
+            w += 2
+        else:
+            w += 1
+    return w
+
+
+def _box_header(lines):
+    """ボックス罫線ヘッダーを生成 (CJK 幅対応)"""
+    inner = 44
+    parts = []
+    parts.append("  +{}+".format("-" * (inner + 2)))
+    for line in lines:
+        dw = _display_width(line)
+        pad = inner - dw
+        if pad < 0:
+            pad = 0
+        parts.append("  | {}{} |".format(line, " " * pad))
+    parts.append("  +{}+".format("-" * (inner + 2)))
+    return "\n".join(parts)
+
 
 class ProductionCommander:
     """生产环境命令器"""
-    
+
     def __init__(self, use_real_hardware: bool = False):
         """初始化命令器
-        
+
         Args:
             use_real_hardware: 是否使用真实硬件（默认False为模拟模式）
         """
-        self.brain = ProductionBrain(use_real_hardware=use_real_hardware)
+        self.brain = None  # defer init to run() for phased output
+        self._use_real_hardware = use_real_hardware
         self.running = True
         self.command_history = []
         self.session_start = datetime.now()
-        
+
     def print_header(self):
         """打印界面头部"""
-        print("\n" + "="*60)
-        print("🤖 Claudia Production Commander - LLM大脑实机测试")
-        print("="*60)
-        print(f"⚙️  模式: {'真实硬件' if self.brain.use_real_hardware else '模拟执行'}")
-        router_mode = self.brain._router_mode.value
-        if router_mode == "dual":
-            action_model = self.brain._channel_router._action_model
-            print("🧠 モデル: {} (dual: Action-primary)".format(action_model))
-        elif router_mode == "shadow":
-            print("🧠 モデル: {} + Action (shadow)".format(self.brain.model_7b))
-        else:
-            print("🧠 モデル: {}".format(self.brain.model_7b))
-        print(f"⏰ 会话开始: {self.session_start.strftime('%Y-%m-%d %H:%M:%S')}")
-        print("-"*60)
-        print("💡 提示: 输入日语/中文/英文命令，输入 /help 查看帮助")
-        print("💡 示例: お手, 坐下, dance, 座ってから挨拶")
-        print("-"*60 + "\n")
-    
+        hw = "実機" if self._use_real_hardware else "sim"
+        router_mode = ""
+        model_info = ""
+        if self.brain:
+            router_mode = self.brain._router_mode.value
+            if router_mode == "dual":
+                model_info = "{} ({})".format(
+                    self.brain._channel_router._action_model, router_mode)
+            elif router_mode == "shadow":
+                model_info = "{} ({})".format(self.brain.model_7b, router_mode)
+            else:
+                model_info = self.brain.model_7b
+        ts = self.session_start.strftime("%Y-%m-%d %H:%M:%S")
+
+        line2 = "{} / {}".format(hw, model_info) if model_info else hw
+        print()
+        print(_box_header([
+            "Claudia Production Commander",
+            line2,
+            ts,
+        ]))
+        print()
+        print("  日本語/中文/English OK, /help でヘルプ")
+        print("  例: お手, 坐下, dance, 座ってから挨拶")
+        print()
+
     def print_help(self):
         """打印帮助信息"""
-        print("\n" + "="*40)
-        print("📖 帮助信息")
-        print("="*40)
-        print("\n基本命令:")
-        print("  お手, おすわり, タッテ, ハート, ダンス")
-        print("  坐下, 站立, 比心, 握手, 跳舞")
-        print("  sit, stand, heart, dance, hello")
-        print("\n复杂命令:")
-        print("  座ってから挨拶 - 坐下然后打招呼")
-        print("  運動して - 做运动")
-        print("  表演一套 - 表演一套动作")
-        print("\n系统命令:")
-        print("  /help    - 显示帮助")
-        print("  /stats   - 显示统计")
-        print("  /history - 显示历史")
-        print("  /clear   - 清屏")
-        print("  /exit    - 退出")
-        print("="*40 + "\n")
-    
+        print()
+        print("  " + "-" * 38)
+        print("  基本命令:")
+        print("    お手, おすわり, タッテ, ハート, ダンス")
+        print("    坐下, 站立, 比心, 握手, 跳舞")
+        print("    sit, stand, heart, dance, hello")
+        print()
+        print("  複合命令:")
+        print("    座ってから挨拶 - 坐下然后打招呼")
+        print("    運動して - 做运动")
+        print("    表演一套 - 表演一套动作")
+        print()
+        print("  システム:")
+        print("    /help    - ヘルプ表示")
+        print("    /stats   - 統計情報")
+        print("    /history - 履歴表示")
+        print("    /clear   - 画面クリア")
+        print("    /exit    - 終了")
+        print("  " + "-" * 38)
+        print()
+
     def print_stats(self):
         """打印统计信息"""
         stats = self.brain.get_statistics()
-        print("\n" + "="*40)
-        print("📊 统计信息")
-        print("="*40)
-        print(f"🧠 模型: {stats['model']}")
-        print(f"⚡ 缓存大小: {stats['cache_size']} 条")
-        print(f"🤖 硬件模式: {'真实' if stats['hardware_mode'] else '模拟'}")
-        print(f"🔌 SportClient: {'已连接' if stats['sport_client'] else '未连接'}")
-        print(f"📝 历史命令: {len(self.command_history)} 条")
+        print()
+        print("  " + "-" * 38)
+        print("  model:    {}".format(stats['model']))
+        print("  cache:    {} entries".format(stats['cache_size']))
+        print("  hardware: {}".format(
+            "real" if stats['hardware_mode'] else "sim"))
+        print("  client:   {}".format(
+            "connected" if stats['sport_client'] else "none"))
+        print("  commands: {}".format(len(self.command_history)))
         runtime = datetime.now() - self.session_start
-        print(f"⏱️ 运行时间: {runtime.total_seconds():.0f} 秒")
-        print("="*40 + "\n")
-    
+        print("  uptime:   {:.0f}s".format(runtime.total_seconds()))
+        print("  " + "-" * 38)
+        print()
+
     def print_history(self):
         """打印历史记录"""
-        print("\n" + "="*40)
-        print("📜 命令历史")
-        print("="*40)
+        print()
+        print("  " + "-" * 38)
         if not self.command_history:
-            print("(暂无历史记录)")
+            print("  (履歴なし)")
         else:
             for i, (timestamp, cmd, response) in enumerate(self.command_history[-10:], 1):
-                print(f"{i}. [{timestamp}] {cmd}")
-                print(f"   → {response}")
-        print("="*40 + "\n")
-    
+                print("  {}. [{}] {}".format(i, timestamp, cmd))
+                print("     -> {}".format(response))
+        print("  " + "-" * 38)
+        print()
+
     async def _warmup_model(self):
         """预热 LLM 模型 — 直接调用 Ollama API 将模型加载到 GPU 显存
 
@@ -117,11 +191,9 @@ class ProductionCommander:
           - Shadow: Action 先 → 7B 后（7B 是主路径，应驻留显存）
           - Dual:   7B 先 → Action 后（Action channel 先执行，应驻留显存）
         """
-        print("🔄 预热模型中...")
         model_name = self.brain.model_7b
 
         def _sync_warmup_http(model, num_ctx):
-            # 标准库兜底: 不依赖 Python ollama 包，直接走本地 Ollama HTTP API
             from urllib.request import Request, urlopen
             payload = json.dumps({
                 "model": model,
@@ -142,11 +214,9 @@ class ProductionCommander:
             with urlopen(req, timeout=20) as resp:
                 resp.read()
 
-        use_ollama_py = False
         sync_warmup_fn = _sync_warmup_http
         try:
             import ollama as _ollama
-            use_ollama_py = True
 
             def _sync_warmup_ollama(model, num_ctx):
                 return _ollama.chat(
@@ -162,53 +232,38 @@ class ProductionCommander:
 
             sync_warmup_fn = _sync_warmup_ollama
         except ImportError:
-            print("ℹ️ 未检测到Python ollama包，使用HTTP API预热")
+            pass
 
         loop = asyncio.get_event_loop()
         router_mode = self.brain._router_mode.value
 
-        # 构建预热序列: (model, num_ctx, label, timeout_s)
-        # 最后预热的模型驻留 VRAM，应为该模式首条命令的主路径模型
-        # Action 模型 num_predict=30 推理轻量，30s 超时足够
         warmup_sequence = []
         if router_mode == "shadow":
-            # Shadow: legacy(7B) 是主路径 → 7B 最后预热
             action_model = self.brain._channel_router._action_model
             warmup_sequence = [
                 (action_model, 1024, "Action", 30),
                 (model_name, 2048, "7B", 60),
             ]
         elif router_mode == "dual":
-            # Dual (Action-primary): 只需 Action 模型，不预热 7B
             action_model = self.brain._channel_router._action_model
             warmup_sequence = [
                 (action_model, 1024, "Action", 30),
             ]
         else:
-            # Legacy: 只有 7B
             warmup_sequence = [
                 (model_name, 2048, "7B", 60),
             ]
 
         for model, num_ctx, label, timeout_s in warmup_sequence:
             try:
-                start = time.time()
                 await asyncio.wait_for(
                     loop.run_in_executor(None, sync_warmup_fn, model, num_ctx),
                     timeout=timeout_s,
                 )
-                elapsed = (time.time() - start) * 1000
-                if use_ollama_py:
-                    print("✅ {} 模型就绪 ({}: {:.0f}ms)".format(
-                        label, model, elapsed))
-                else:
-                    print("✅ {} 模型就绪[HTTP] ({}: {:.0f}ms)".format(
-                        label, model, elapsed))
             except asyncio.TimeoutError:
-                print("⚠️ {} 模型预热超时 ({}s)，继续".format(
-                    label, timeout_s))
-            except Exception as e:
-                print("⚠️ {} 模型预热失败: {}，继续".format(label, e))
+                pass  # phase display handles messaging
+            except Exception:
+                pass  # phase display handles messaging
 
     async def _wakeup_animation(self):
         """唤醒动画 — 机器人起立+伸懒腰
@@ -227,17 +282,16 @@ class ProductionCommander:
         if os.environ.get("COMMANDER_WAKEUP_ANIMATION") != "1":
             return
 
-        print("🐕 唤醒动画: 起立 → 伸懒腰")
+        print("  wakeup: StandUp -> Stretch")
         wakeup_start = time.time()
         standup_code = None
         stretch_code = None
-        standup_confirmed = False  # 3104 后验确认结果（审计 success 语义用）
+        standup_confirmed = False
         try:
-            # StandUp(1004)
             result = self.brain._rpc_call("StandUp")
             standup_code = result[0] if isinstance(result, tuple) else result
             if standup_code not in (0, -1, 3104):
-                print("⚠️ 起立失败 (code={}), 跳过伸懒腰".format(standup_code))
+                print("  [warn] standup failed (code={})".format(standup_code))
                 return
 
             if standup_code in (0, -1):
@@ -245,44 +299,35 @@ class ProductionCommander:
                 self.brain._update_posture_tracking(1004)
                 await asyncio.sleep(1.5)
             elif standup_code == 3104:
-                # 3104: 通过 GetState 短轮询确认站立，不做乐观写入
                 await asyncio.sleep(2.0)
                 standing_ok = await self.brain._verify_standing_after_unknown()
                 if standing_ok:
                     standup_confirmed = True
                     self.brain._update_posture_tracking(1004)
                 else:
-                    print("⚠️ 起立未确认 (3104), 跳过伸懒腰")
+                    print("  [warn] standup unconfirmed (3104)")
                     return
 
-            # Stretch(1017)
             result = self.brain._rpc_call("Stretch")
             stretch_code = result[0] if isinstance(result, tuple) else result
             if stretch_code in (0, -1, 3104):
                 await asyncio.sleep(4.0)
-                print("✅ 唤醒动画完成")
             else:
-                print("⚠️ 伸懒腰失败 (code={})".format(stretch_code))
+                print("  [warn] stretch failed (code={})".format(stretch_code))
 
         except Exception as e:
-            print("⚠️ 唤醒动画异常: {}，继续启动".format(e))
+            print("  [warn] wakeup error: {}".format(e))
         finally:
             self._log_wakeup_audit(
                 standup_code, stretch_code, wakeup_start, standup_confirmed)
 
     def _log_wakeup_audit(self, standup_code, stretch_code, start_time,
                           standup_confirmed=False):
-        """记录唤醒动画的审计条目
-
-        Args:
-            standup_confirmed: StandUp 是否最终确认成功
-                (code=0/-1 直接确认, code=3104 需 _verify_standing_after_unknown 后验)
-        """
+        """记录唤醒动画的审计条目"""
         try:
             from claudia.brain.audit_logger import AuditEntry, get_audit_logger
             from claudia.brain.audit_routes import ROUTE_STARTUP
             elapsed = (time.time() - start_time) * 1000
-            # success, safety_verdict, safety_reason 从同一逻辑派生，避免不一致
             stretch_ok = (stretch_code is None
                           or stretch_code in (0, -1, 3104))
             wakeup_success = standup_confirmed and stretch_ok
@@ -314,12 +359,11 @@ class ProductionCommander:
             )
             get_audit_logger().log_entry(entry)
         except Exception:
-            pass  # 审计失败不阻塞启动
+            pass
 
-    async def process_command(self, command: str):
+    async def process_command(self, command):
         """处理单个命令"""
         if command.startswith("/"):
-            # 系统命令
             if command == "/help":
                 self.print_help()
             elif command == "/stats":
@@ -327,44 +371,41 @@ class ProductionCommander:
             elif command == "/history":
                 self.print_history()
             elif command == "/clear":
-                os.system('clear' if os.name == 'posix' else 'cls')
+                print("\033[2J\033[H", end="")  # ANSI clear screen
                 self.print_header()
             elif command == "/exit":
                 self.running = False
-                print("\n👋 再见！感谢使用Claudia Production Commander\n")
+                print("\n  bye!\n")
             else:
-                print(f"❌ 未知命令: {command}")
+                print("  [error] unknown: {}".format(command))
         else:
-            # 用户指令 — 使用原子入口 process_and_execute（PR2 迁移）
-            print(f"\n🎯 处理指令: '{command}'")
-            print("-"*40)
+            print()
+            print("  cmd> '{}'".format(command))
+            print("  " + "-" * 38)
 
             start_time = time.time()
             brain_output = await self.brain.process_and_execute(command)
             process_time = (time.time() - start_time) * 1000
 
-            # 显示结果
-            print(f"💬 回复: {brain_output.response}")
+            print("  res> {}".format(brain_output.response))
 
             if brain_output.api_code:
-                print(f"🔧 API: {brain_output.api_code}")
+                print("  api: {}".format(brain_output.api_code))
 
             if brain_output.sequence:
-                print(f"📋 序列: {brain_output.sequence}")
+                print("  seq: {}".format(brain_output.sequence))
 
-            print(f"⏱️ 处理时间: {process_time:.0f}ms")
+            print("  time: {:.0f}ms".format(process_time))
 
-            # 执行状态（process_and_execute 内已完成执行）
             if brain_output.api_code or brain_output.sequence:
-                print("-"*40)
-                if brain_output.execution_status == "success":
-                    print("✅ 执行成功")
-                elif brain_output.execution_status == "unknown":
-                    print("⚠️ 动作超时（机器人可达，可能仍在执行）")
-                elif brain_output.execution_status == "failed":
-                    print("❌ 执行失败")
+                status = brain_output.execution_status
+                if status == "success":
+                    print("  [ok]")
+                elif status == "unknown":
+                    print("  [timeout] (実行中の可能性)")
+                elif status == "failed":
+                    print("  [failed]")
 
-            # 记录历史
             timestamp = datetime.now().strftime("%H:%M:%S")
             self.command_history.append((
                 timestamp,
@@ -372,62 +413,96 @@ class ProductionCommander:
                 brain_output.response
             ))
 
-            print("-"*40 + "\n")
-    
+            print("  " + "-" * 38)
+            print()
+
     async def run(self):
         """运行主循环"""
+        total = 2
+        print()
+
+        # 起動フェーズ中の INFO ログを抑制
+        # Brain: logger 級 (handler は __init__ 内で作られる)
+        # Root: handler 級 (propagate 経由の record を捕捉)
+        quiet = _QuietFilter()
+        brain_logger = logging.getLogger("ProductionBrain")
+        brain_logger.addFilter(quiet)
+        _suppressed_handlers = []
+        for h in logging.getLogger().handlers:
+            h.addFilter(quiet)
+            _suppressed_handlers.append(h)
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+
+        try:
+            # 1. Brain 初期化
+            t = _phase_start(1, total, "Brain")
+            self.brain = ProductionBrain(use_real_hardware=self._use_real_hardware)
+
+            hw = "実機" if self._use_real_hardware else "sim"
+            mode = self.brain._router_mode.value
+            detail = "{} / {}".format(hw, mode)
+            try:
+                if self.brain.state_monitor:
+                    batt = self.brain.state_monitor.battery_level
+                    if batt is not None:
+                        detail += " / battery {}%".format(batt)
+            except Exception:
+                pass
+            _phase_ok_detail(t, detail)
+
+            # 2. LLM 予熱 + 唤醒動画
+            t = _phase_start(2, total, "LLM warmup")
+            await asyncio.gather(
+                self._warmup_model(),
+                self._wakeup_animation(),
+            )
+            _phase_ok(t)
+        finally:
+            brain_logger.removeFilter(quiet)
+            for h in _suppressed_handlers:
+                h.removeFilter(quiet)
+
+        # ヘッダー表示 (Brain 情報が揃った状態で)
         self.print_header()
 
-        # 并行执行: LLM 预热 + 唤醒动画（起立→伸懒腰）
-        # LLM 冷加载 5-25s，唤醒动画 ~8s，并行执行不增加等待时间
-        await asyncio.gather(
-            self._warmup_model(),
-            self._wakeup_animation(),
-        )
-        print("")
-        
         # 主循环
         while self.running:
             try:
-                # 获取用户输入
-                command = input("くら> ").strip()
-                
+                command = input("  > ").strip()
+
                 if command:
                     await self.process_command(command)
-                    
+
             except KeyboardInterrupt:
-                print("\n\n⚠️ 检测到Ctrl+C，正在退出...")
+                print("\n\n  Ctrl+C, shutting down...")
                 self.running = False
             except Exception as e:
-                print(f"\n❌ 错误: {e}\n")
-        
-        # 清理
-        print("\n🧹 清理资源...")
-        print("✅ 会话结束\n")
+                print("\n  [error] {}\n".format(e))
+
+        runtime = datetime.now() - self.session_start
+        print("  session: {} commands, {:.0f}s\n".format(
+            len(self.command_history), runtime.total_seconds()))
 
 
 async def main():
     """主函数"""
     import argparse
-    
+
     parser = argparse.ArgumentParser(description="Claudia Production Commander")
     parser.add_argument(
         "--hardware",
         action="store_true",
         help="使用真实硬件模式（默认为模拟模式）"
     )
-    
+
     args = parser.parse_args()
-    
-    # 创建并运行命令器
+
     commander = ProductionCommander(use_real_hardware=args.hardware)
     await commander.run()
 
 
 if __name__ == "__main__":
-    # 设置事件循环
     if sys.platform == 'win32':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    
-    # 运行主程序
+
     asyncio.run(main())
