@@ -76,7 +76,7 @@ export PYTHONPATH=/home/m1ng/claudia/unitree_sdk2_python:$PYTHONPATH  # SDK impo
 export BRAIN_MODEL_7B=claudia-7b:v2.0  # Override LLM model
 
 # PR2: Dual-channel routing
-export BRAIN_ROUTER_MODE=legacy   # "legacy" (default) | "dual" | "shadow"
+export BRAIN_ROUTER_MODE=dual     # "dual" (default) | "legacy" | "shadow"
 export BRAIN_MODEL_ACTION=claudia-action-v3  # Action channel model name
 ```
 
@@ -91,17 +91,16 @@ User Input → process_and_execute()
   ↓
 1. Emergency Bypass    — hardcoded stop/halt commands, ~0ms, bypasses everything
   ↓
-2. Quick Safety Precheck — battery-based rejection before LLM (≤10%: only sit/stop/stand; ≤20%: no flips/jumps)
+2. Hot Cache           — ~60+ cached command→API mappings + KANA_ALIASES auto-expansion
+                         + Japanese suffix stripping (です/ます/ください → base form match)
   ↓
-3. Hot Cache           — ~40 cached command→API mappings for cultural terms, emergency stops, core actions
+3. Conversational Detection — pattern-matching for greetings/questions, returns text-only (no API)
   ↓
-4. Conversational Detection — pattern-matching for greetings/questions, returns text-only (no API)
-  ↓
-5. LLM Inference (BRAIN_ROUTER_MODE controls routing):
+4. LLM Inference (BRAIN_ROUTER_MODE controls routing):
+   - dual (default): Action channel (action-only model, ~30 tokens) → template response
+                     a=null → template conversational response (no 7B needed)
    - legacy: 7B model via Ollama → JSON {"response":"...", "api_code":N}
-   - dual:   Action channel (action-only model, ~30 tokens) → template response
-             a=null → Voice channel (legacy LLM for text)
-   - shadow: Legacy wins, Dual runs in parallel for A/B comparison logging
+   - shadow: Legacy wins, Action runs sequentially for A/B comparison logging (single GPU)
   ↓
 Post-processing:
   - SafetyCompiler: validates ALL router modes (Invariant 1 — never bypassed)
@@ -116,15 +115,16 @@ execution_status: "success" | "unknown" | "failed" | "skipped"
 ### Key Design Decisions
 
 - **Atomic entry point**: `process_and_execute()` handles process + execute + status in one call. Direct `process_command()` calls emit deprecation warning via `contextvars.ContextVar`
-- **Dual-channel routing** (PR2): `ChannelRouter` in `channel_router.py` is **decision-only** — never executes or calls SafetyCompiler. Three modes via `BRAIN_ROUTER_MODE` env var (default: `legacy`)
+- **Dual-channel routing** (PR2): `ChannelRouter` in `channel_router.py` is **decision-only** — never executes or calls SafetyCompiler. Three modes via `BRAIN_ROUTER_MODE` env var (default: `dual`)
 - **Single 7B model** (legacy): `claudia-7b:v2.0`, configurable via `BRAIN_MODEL_7B` env var
 - **Action model** (dual/shadow): `claudia-action-v3`, `num_predict=30`, `temperature=0.0`, outputs only `{"a":N}` or `{"s":[...]}` or `{"a":null}`
 - **Ollama JSON mode**: `format='json'` with `temperature=0.0` for deterministic output
 - **Graceful fallback chain**: Real SportClient → MockSportClient → simulation mode. Error 3103 (sport mode occupied by Unitree app) auto-falls back to mock.
 - **LRU cache on `_call_ollama`**: subprocess-based fallback path caches results
 - **Async LLM calls**: `_call_ollama_v2` uses `asyncio.wait_for` + thread executor (Python 3.8 compatible, no `asyncio.to_thread`)
-- **Response sanitization**: `_sanitize_response()` rejects non-Japanese LLM output (checks for hiragana/katakana/kanji)
-- **Shadow mode**: Legacy result returned to user; dual result logged for comparison. 5s timeout, request_id tracking, high_risk_divergence detection
+- **Response sanitization**: `_sanitize_response()` rejects non-Japanese LLM output (checks for hiragana/katakana/kanji) + word-boundary regex for nonsense filtering
+- **Shadow mode**: Legacy result returned to user; dual result logged for comparison. Sequential execution (single GPU), request_id tracking, high_risk_divergence detection
+- **Action channel timeout**: 10s (Jetson GPU inference 3-5s + context switch overhead)
 
 ### Robot Actions (API Codes)
 
@@ -162,17 +162,22 @@ Actions requiring standing state: 1016, 1017, 1022, 1023, 1029, 1030, 1031, 1032
 ### Voice Pipeline (Phase 2)
 
 ```
-USB Mic (AT2020USB-XP, hw:2,0, 44100Hz)
+USB Mic (AT2020USB-XP, auto-detect card, 44100Hz)
   │ arecord subprocess → resample → 16kHz 960byte frames
   ▼
 AudioCapture ──→ /tmp/claudia_audio.sock ──→ ASR Server (subprocess)
                                                 ├── silero-vad + emergency
-                                                ├── faster-whisper (ja)
+                                                ├── faster-whisper base (ja, beam=1, CPU int8)
                                                 ▼
 ASRBridge ←── /tmp/claudia_asr_result.sock ←─── JSON Lines
-  ├── emergency → immediate brain call + queue flush
-  ├── transcript → confidence filter → dedup → Queue(3)
+  ├── emergency → queue flush + cooldown → brain call (bypass lock)
+  ├── transcript → confidence ≥0.55 filter → dedup → Queue(3)
   └── command worker → brain.process_and_execute(text)
+
+ASR env overrides:
+  CLAUDIA_ASR_MODEL=small          # base(default)/small/medium
+  CLAUDIA_ASR_BEAM_SIZE=3          # 1(default,greedy)/3+(beam search)
+  CLAUDIA_ASR_DEVICE=cuda          # cpu(default)/cuda
 ```
 
 ### Hardware Communication
@@ -201,8 +206,12 @@ Robot IP: `192.168.123.161` via `eth0`
 | Error 3103 | Unitree app occupying sport mode | Close app, restart robot |
 | DDS connection failed | Wrong network config | Check `eth0` has `192.168.123.x`, verify `RMW_IMPLEMENTATION` |
 | LLM timeout | Model not loaded or Ollama down | `ollama list`, `curl localhost:11434/api/tags` |
+| Action channel 10s timeout | Jetson GPU cold start or long input | First command after idle; model re-warms automatically |
 | Import errors (unitree_sdk2py) | Missing PYTHONPATH | `export PYTHONPATH=/home/m1ng/claudia/unitree_sdk2_python:$PYTHONPATH` |
 | Non-Japanese LLM output | Model hallucination | Handled by `_sanitize_response()`, falls back to default Japanese |
+| `(聴取中)` but no recognition | Mic mute/low gain/VAD not triggering | Check mic gain, test: `arecord -D hw:X,0 -d 3 /tmp/t.raw` then check RMS |
+| Hot cache miss on `かわいいです` | Suffix not stripped | Fixed: suffix stripping layer (です/ます/ください) now active |
+| ASR slow (>5s/utterance) | whisper-small on CPU | Use base (default) or set `CLAUDIA_ASR_MODEL=base` |
 
 ## Project Conventions
 
