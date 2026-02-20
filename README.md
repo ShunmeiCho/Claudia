@@ -365,11 +365,4 @@ curl http://localhost:11434/api/tags         # Ollama health check
 
 MIT License — see [LICENSE](LICENSE) for details.
 
-## Contributors
-
-- **ShunmeiCho** — Project vision and core insights
-- **Claude AI** — Technical implementation and architecture design
-
----
-
 *Last updated: 2026-02-20*

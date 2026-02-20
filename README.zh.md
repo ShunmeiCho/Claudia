@@ -357,11 +357,4 @@ mypy src/
 
 MIT License — 详见 [LICENSE](LICENSE)。
 
-## 贡献者
-
-- **ShunmeiCho** — 项目愿景与核心洞察
-- **Claude AI** — 技术实现与架构设计
-
----
-
 *最后更新：2026-02-20*
