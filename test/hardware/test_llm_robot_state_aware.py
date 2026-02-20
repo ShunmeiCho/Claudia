@@ -17,8 +17,9 @@ import subprocess
 from datetime import datetime
 
 # 设置项目路径
-sys.path.append('/home/m1ng/claudia/src')
-sys.path.append('/home/m1ng/claudia/unitree_sdk2_python')
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.append(os.path.join(_PROJECT_ROOT, 'src'))
+sys.path.append(os.path.join(_PROJECT_ROOT, 'unitree_sdk2_python'))
 
 def setup_cyclonedds_environment():
     """设置CycloneDDS环境"""
@@ -27,7 +28,7 @@ def setup_cyclonedds_environment():
     try:
         result = subprocess.run([
             'bash', '-c', 
-            'source /home/m1ng/claudia/scripts/setup/setup_cyclonedds.sh && env'
+            'source ~/claudia/scripts/setup/setup_cyclonedds.sh && env'
         ], capture_output=True, text=True, check=True)
         
         env_vars = {}

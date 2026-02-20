@@ -38,11 +38,11 @@ SportClient初始化失败: 'NoneType' object has no attribute '_ref'
 **修复方案**：
 ```python
 # 正确的导入路径
-sys.path.append('/home/m1ng/claudia')
-sys.path.append('/home/m1ng/claudia/unitree_sdk2_python')
+sys.path.append('~/claudia')
+sys.path.append('~/claudia/unitree_sdk2_python')
 
 # 设置必要的环境变量
-os.environ['CYCLONEDDS_HOME'] = '/home/m1ng/claudia/cyclonedds_ws/install'
+os.environ['CYCLONEDDS_HOME'] = '~/claudia/cyclonedds_ws/install'
 
 # 添加优雅降级
 try:

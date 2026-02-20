@@ -144,7 +144,7 @@ pip3 install -e .
 
 #### 5. 运行完整验证
 ```bash
-cd /home/m1ng/claudia/scripts/validation/imu
+cd ~/claudia/scripts/validation/imu
 chmod +x setup_cyclonedx_and_test.sh
 ./setup_cyclonedx_and_test.sh
 ```

@@ -26,29 +26,25 @@ class TestRunner:
         self.results = {}
     
     def run_hardware_tests(self, verbose: bool = False) -> bool:
-        """运行硬件测试"""
+        """运行硬件测试（自动发现所有 test_*.py 文件）"""
         print("🤖 运行硬件测试...")
-        
-        hardware_tests = [
-            "test_unitree_connection.py",
-            # 未来添加: "test_ros2_communication.py", "test_sensors.py"
-        ]
-        
+
+        hardware_test_files = sorted((self.test_dir / "hardware").glob("test_*.py"))
+        if not hardware_test_files:
+            print("  ℹ️ 暂无硬件测试文件")
+            return True
+
         success = True
-        for test_file in hardware_tests:
-            test_path = self.test_dir / "hardware" / test_file
-            if test_path.exists():
-                print(f"  🔧 运行 {test_file}...")
-                result = self._run_single_test(test_path, verbose)
-                self.results[f"hardware/{test_file}"] = result
-                if not result:
-                    success = False
-                    print(f"    ❌ {test_file} 失败")
-                else:
-                    print(f"    ✅ {test_file} 通过")
+        for test_path in hardware_test_files:
+            print(f"  🔧 运行 {test_path.name}...")
+            result = self._run_single_test(test_path, verbose)
+            self.results[f"hardware/{test_path.name}"] = result
+            if not result:
+                success = False
+                print(f"    ❌ {test_path.name} 失败")
             else:
-                print(f"  ⚠️ {test_file} 不存在，跳过")
-        
+                print(f"    ✅ {test_path.name} 通过")
+
         return success
     
     def run_unit_tests(self, verbose: bool = False) -> bool:

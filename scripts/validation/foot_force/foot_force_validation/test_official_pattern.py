@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # Test official Unitree SDK pattern for reading data
 import sys
-sys.path.insert(0, '/home/m1ng/claudia/src')
+import os
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+sys.path.insert(0, os.path.join(_PROJECT_ROOT, 'src'))
 
 def test_official_read_pattern():
     """Test the official way to read data from Unitree robot"""

@@ -287,28 +287,13 @@ class ChannelRouter:
         return RouterResult(
             api_code=api_code,
             sequence=sequence,
-            response="",  # 由 _generate_template_response 或 _voice_fallback 填充
+            response="",  # 由 _generate_template_response 填充
             route=ROUTE_ACTION_CHANNEL,
             action_latency_ms=latency,
             request_id=request_id,
             raw_llm_output=str(raw)[:200],
             _action_status=action_status,
         )
-
-    async def _voice_fallback(self, command, request_id,
-                              state_snapshot=None, start_time=None):
-        # type: (str, str, Any, Optional[float]) -> RouterResult
-        """a=null 时的 Voice 回退: 调用 legacy LLM 获取完整文本响应
-
-        Invariant 2: 绝不返回空响应给用户
-        """
-        t0 = time.monotonic()
-        legacy = await self._legacy_route(command, request_id,
-                                          state_snapshot=state_snapshot,
-                                          start_time=start_time)
-        legacy.route = ROUTE_VOICE_CHANNEL
-        legacy.voice_latency_ms = (time.monotonic() - t0) * 1000
-        return legacy
 
     def _generate_template_response(self, result):
         # type: (RouterResult) -> str

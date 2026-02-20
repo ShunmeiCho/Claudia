@@ -11,7 +11,8 @@ import time
 import os
 
 # 设置环境和路径
-sys.path.append('/home/m1ng/claudia/unitree_sdk2_python')
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.append(os.path.join(_PROJECT_ROOT, 'unitree_sdk2_python'))
 os.environ['RMW_IMPLEMENTATION'] = 'rmw_cyclonedds_cpp'
 
 def test_dance_return_codes():

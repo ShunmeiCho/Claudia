@@ -33,7 +33,7 @@
 首先运行快速测试验证所有组件是否正常工作：
 
 ```bash
-cd /home/m1ng/claudia
+cd ~/claudia
 python3 scripts/validation/foot_force/run_quick_abcd_test.py
 ```
 
@@ -48,7 +48,7 @@ python3 scripts/validation/foot_force/run_quick_abcd_test.py
 在确认组件测试通过后，运行完整验证：
 
 ```bash
-cd /home/m1ng/claudia
+cd ~/claudia
 python3 scripts/validation/foot_force/run_complete_validation.py
 ```
 
@@ -98,7 +98,7 @@ output/
 ### 1. 组件导入失败
 ```bash
 # 检查Python路径
-export PYTHONPATH="/home/m1ng/claudia:$PYTHONPATH"
+export PYTHONPATH="~/claudia:$PYTHONPATH"
 ```
 
 ### 2. 机器人连接失败

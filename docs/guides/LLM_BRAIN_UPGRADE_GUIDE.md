@@ -126,7 +126,7 @@
 ### Phase 1：环境准备
 
 ```bash
-cd /home/m1ng/claudia
+cd ~/claudia
 
 # 1. 安装Python ollama库
 pip3 install ollama
@@ -299,7 +299,7 @@ else:
 
 ### 新增文件
 ```
-/home/m1ng/claudia/
+~/claudia/
 ├── start_production_brain_v2.sh      # Track A增强启动脚本
 ├── ClaudiaIntelligent_Qwen7B         # Track B新Modelfile
 ├── deploy_track_b.sh                 # Track B自动部署

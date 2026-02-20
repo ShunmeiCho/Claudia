@@ -15,7 +15,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-REQUIREMENTS_FILE="/home/m1ng/claudia/src/claudia/audio/asr_service/requirements.txt"
+REQUIREMENTS_FILE="$HOME/claudia/src/claudia/audio/asr_service/requirements.txt"
 PYTHON_BIN="python3"
 
 # Colors
@@ -128,7 +128,7 @@ fi
 # ---------------------------------------------------------------------------
 log_info "Step 5/5: Checking .gitignore..."
 
-GITIGNORE="/home/m1ng/claudia/.gitignore"
+GITIGNORE="$HOME/claudia/.gitignore"
 if grep -qxF '.venvs/' "$GITIGNORE" 2>/dev/null; then
     log_ok ".venvs/ already in .gitignore"
 else

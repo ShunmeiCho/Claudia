@@ -15,7 +15,7 @@ ROS2初始化失败，启用模拟模式
 ```
 
 **根本原因**：
-- LD_LIBRARY_PATH=/home/m1ng/cyclonedds/install/lib 导致ROS2 rmw加载了CycloneDDS 0.10.x
+- LD_LIBRARY_PATH=~/cyclonedds/install/lib 导致ROS2 rmw加载了CycloneDDS 0.10.x
 - ROS2 Foxy的rmw_cyclonedds_cpp编译针对CycloneDDS 0.7.0，库不兼容
 
 **影响评估**：
@@ -207,7 +207,7 @@ ROS2初始化失败，启用模拟模式
 ```bash
 # 确认LD_LIBRARY_PATH配置
 echo $LD_LIBRARY_PATH
-# 应包含: /home/m1ng/cyclonedds/install/lib
+# 应包含: ~/cyclonedds/install/lib
 
 # 确认网络连接
 ping -c 3 192.168.123.161
@@ -346,7 +346,7 @@ ImportError: undefined symbol: ddsi_sertype_v0
 
 **修复**：
 ```bash
-export LD_LIBRARY_PATH=/home/m1ng/cyclonedds/install/lib:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=~/cyclonedds/install/lib:$LD_LIBRARY_PATH
 ```
 
 ### Ollama模型未加载
@@ -471,7 +471,7 @@ export RCUTILS_LOGGING_BUFFERED_STREAM=0
 **A**：
 ```bash
 ldd ~/.local/lib/python3.8/site-packages/cyclonedds/_clayer.so | grep ddsc
-# 应显示: /home/m1ng/cyclonedds/install/lib/libddsc.so.0
+# 应显示: ~/cyclonedds/install/lib/libddsc.so.0
 ```
 
 ---

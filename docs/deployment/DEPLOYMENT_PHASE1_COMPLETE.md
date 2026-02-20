@@ -237,7 +237,7 @@ safety:
 
 ```
 commit cea0f0fae0e0b756b312cb37d8ce4aa2195acfd2
-Author: ShunmeiCho <cyo20020330@icloud.com>
+Author: ShunmeiCho
 Date:   Fri Nov 14 13:37:29 2025 +0800
 
     fix: 状态快照+热路径+安全门 (Critical修复完成)

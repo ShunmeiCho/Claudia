@@ -10,7 +10,7 @@ echo "=================================="
 echo ""
 
 # 工作目录
-cd /home/m1ng/claudia
+cd $HOME/claudia
 
 # ========================
 # 1. ROS2 Foxy 环境
@@ -34,8 +34,8 @@ fi
 # ========================
 echo "🔧 配置CycloneDDS（rmw_cyclonedds_cpp + eth0）..."
 # 使用独立编译的CycloneDDS 0.10.x（解决符号不匹配问题）
-export CYCLONEDDS_HOME=/home/m1ng/cyclonedds/install
-export LD_LIBRARY_PATH=/home/m1ng/cyclonedds/install/lib:$LD_LIBRARY_PATH
+export CYCLONEDDS_HOME=$HOME/cyclonedds/install
+export LD_LIBRARY_PATH=$HOME/cyclonedds/install/lib:$LD_LIBRARY_PATH
 
 # ROS2配置（仍使用ROS2 Foxy的CycloneDDS RMW）
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp

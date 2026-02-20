@@ -3,7 +3,9 @@
 import sys
 import subprocess
 import time
-sys.path.insert(0, '/home/m1ng/claudia/src')
+import os
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+sys.path.insert(0, os.path.join(_PROJECT_ROOT, 'src'))
 
 def check_robot_services():
     """Check if robot services are running"""

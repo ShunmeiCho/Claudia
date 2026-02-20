@@ -136,7 +136,7 @@ export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
 ### Python依赖
 - Python 3.8+
-- unitree_sdk2py (已安装在 `/home/m1ng/claudia/unitree_sdk2_python`)
+- unitree_sdk2py (已安装在 `~/claudia/unitree_sdk2_python`)
 - 标准库: time, statistics, datetime, typing
 
 ### 网络要求
@@ -178,7 +178,7 @@ pytest test/hardware/test_communication_performance.py -v
 1. **模块导入错误**
    ```bash
    # 确认SDK路径正确
-   ls /home/m1ng/claudia/unitree_sdk2_python
+   ls ~/claudia/unitree_sdk2_python
    ```
 
 2. **DDS连接失败**

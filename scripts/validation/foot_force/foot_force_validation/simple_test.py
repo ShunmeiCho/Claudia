@@ -19,7 +19,8 @@ def test_ping():
 def test_import():
     print("🔍 Testing Unitree SDK import...")
     try:
-        sys.path.insert(0, '/home/m1ng/claudia/src')
+        _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+        sys.path.insert(0, os.path.join(_project_root, 'src'))
         from unitree_sdk2py.core.channel import ChannelSubscriber
         from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowState_
         print("✅ SDK import successful")

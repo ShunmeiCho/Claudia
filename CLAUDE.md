@@ -72,7 +72,7 @@ source install/setup.bash
 ```bash
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp   # Required for Go2 DDS
 export CYCLONEDDS_URI='...'                     # eth0 network interface config
-export PYTHONPATH=/home/m1ng/claudia/unitree_sdk2_python:$PYTHONPATH  # SDK imports
+export PYTHONPATH=~/claudia/unitree_sdk2_python:$PYTHONPATH  # SDK imports
 export BRAIN_MODEL_7B=claudia-7b:v2.0  # Override LLM model
 
 # PR2: Dual-channel routing
@@ -207,7 +207,7 @@ Robot IP: `192.168.123.161` via `eth0`
 | DDS connection failed | Wrong network config | Check `eth0` has `192.168.123.x`, verify `RMW_IMPLEMENTATION` |
 | LLM timeout | Model not loaded or Ollama down | `ollama list`, `curl localhost:11434/api/tags` |
 | Action channel 10s timeout | Jetson GPU cold start or long input | First command after idle; model re-warms automatically |
-| Import errors (unitree_sdk2py) | Missing PYTHONPATH | `export PYTHONPATH=/home/m1ng/claudia/unitree_sdk2_python:$PYTHONPATH` |
+| Import errors (unitree_sdk2py) | Missing PYTHONPATH | `export PYTHONPATH=~/claudia/unitree_sdk2_python:$PYTHONPATH` |
 | Non-Japanese LLM output | Model hallucination | Handled by `_sanitize_response()`, falls back to default Japanese |
 | `(聴取中)` but no recognition | Mic mute/low gain/VAD not triggering | Check mic gain, test: `arecord -D hw:X,0 -d 3 /tmp/t.raw` then check RMS |
 | Hot cache miss on `かわいいです` | Suffix not stripped | Fixed: suffix stripping layer (です/ます/ください) now active |

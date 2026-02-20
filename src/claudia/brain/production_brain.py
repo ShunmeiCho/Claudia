@@ -1112,7 +1112,7 @@ class ProductionBrain:
             )
             if verdict.is_blocked:
                 self.logger.warning("路由器路径安全拒绝: {}".format(verdict.block_reason))
-                elapsed = (time.time() - start_time) * 1000
+                elapsed = (time.monotonic() - start_time) * 1000
                 rejected_output = BrainOutput(
                     response=verdict.response_override or "安全のため動作を停止しました",
                     api_code=None, confidence=1.0,
@@ -1149,7 +1149,7 @@ class ProductionBrain:
             final_api = api_code
             final_sequence = sequence
 
-        elapsed = (time.time() - start_time) * 1000
+        elapsed = (time.monotonic() - start_time) * 1000
         output = BrainOutput(
             response=response,
             api_code=final_api,
@@ -1231,7 +1231,7 @@ class ProductionBrain:
                 "process_command() called outside process_and_execute() "
                 "— 请迁移至 process_and_execute() 原子入口"
             )
-        start_time = time.time()
+        start_time = time.monotonic()
         self.logger.info(f"📥 接收指令: '{command}'")
 
         # ===== 1) 一次性快照并统一归一化 =====
@@ -1313,7 +1313,7 @@ class ProductionBrain:
         # 0. 紧急指令快速通道 — 引用 EMERGENCY_COMMANDS 唯一真源
         cmd_emergency = command.strip().lower().rstrip(self._TRAILING_PUNCTUATION)
         if cmd_emergency in self.EMERGENCY_COMMANDS:
-            elapsed = (time.time() - start_time) * 1000
+            elapsed = (time.monotonic() - start_time) * 1000
             self.logger.info("紧急指令旁路 ({:.0f}ms)".format(elapsed))
             output = BrainOutput(
                 response=self.EMERGENCY_COMMANDS[cmd_emergency],
@@ -1375,7 +1375,7 @@ class ProductionBrain:
                 )
                 if verdict.is_blocked:
                     self.logger.warning("热路径安全拒绝: {}".format(verdict.block_reason))
-                    elapsed = (time.time() - start_time) * 1000
+                    elapsed = (time.monotonic() - start_time) * 1000
                     rejected_output = BrainOutput(
                         response=verdict.response_override or "安全のため動作を停止しました",
                         api_code=None, confidence=1.0,
@@ -1410,7 +1410,7 @@ class ProductionBrain:
                 success=True,
             )
 
-            elapsed = (time.time() - start_time) * 1000
+            elapsed = (time.monotonic() - start_time) * 1000
             self.logger.info("热路径处理完成 ({:.0f}ms)".format(elapsed))
             self._log_audit(
                 command, brain_output, route=ROUTE_HOTPATH,
@@ -1468,7 +1468,7 @@ class ProductionBrain:
                 )
                 if verdict.is_blocked:
                     self.logger.warning("序列安全拒绝: {}".format(verdict.block_reason))
-                    elapsed = (time.time() - start_time) * 1000
+                    elapsed = (time.monotonic() - start_time) * 1000
                     rejected_output = BrainOutput(
                         response=verdict.response_override or "安全のため動作を停止しました",
                         api_code=None, reasoning="sequence_safety_rejected",
@@ -1490,7 +1490,7 @@ class ProductionBrain:
                     success=True,
                 )
 
-                elapsed = (time.time() - start_time) * 1000
+                elapsed = (time.monotonic() - start_time) * 1000
                 self._log_audit(
                     command, seq_output, route=ROUTE_SEQUENCE,
                     elapsed_ms=elapsed, cache_hit=False, model_used="sequence_hotpath",
@@ -1503,7 +1503,7 @@ class ProductionBrain:
         # ===== 3.5) 对话查询检测（避免LLM将对话误解为动作） =====
         if self._is_conversational_query(command):
             conversational_response = self._generate_conversational_response(command)
-            elapsed = (time.time() - start_time) * 1000
+            elapsed = (time.monotonic() - start_time) * 1000
             self.logger.info(f"💬 对话查询识别 ({elapsed:.0f}ms)")
 
             dialog_output = BrainOutput(
@@ -1540,7 +1540,7 @@ class ProductionBrain:
             )
             if verdict.is_blocked:
                 self.logger.warning("舞蹈安全拒绝: {}".format(verdict.block_reason))
-                elapsed = (time.time() - start_time) * 1000
+                elapsed = (time.monotonic() - start_time) * 1000
                 rejected_output = BrainOutput(
                     response=verdict.response_override or "安全のため動作を停止しました",
                     api_code=None, reasoning="dance_safety_rejected",
@@ -1561,7 +1561,7 @@ class ProductionBrain:
                 final_api = None
                 final_sequence = exec_seq
 
-            elapsed = (time.time() - start_time) * 1000
+            elapsed = (time.monotonic() - start_time) * 1000
             self.logger.info("随机选择舞蹈{} ({:.0f}ms)".format(dance_name, elapsed))
             dance_output = BrainOutput(
                 response="踊ります{}".format(dance_name),
@@ -1588,7 +1588,7 @@ class ProductionBrain:
             )
 
             if result:
-                elapsed = (time.time() - start_time) * 1000
+                elapsed = (time.monotonic() - start_time) * 1000
                 self.logger.info("7B模型响应 ({:.0f}ms)".format(elapsed))
 
                 raw_response = result.get("response") or result.get("r", "実行します")
@@ -1663,7 +1663,7 @@ class ProductionBrain:
                 return llm_output
 
             # Legacy 无响应降级
-            elapsed = (time.time() - start_time) * 1000
+            elapsed = (time.monotonic() - start_time) * 1000
             self.logger.warning("模型无响应，使用默认 ({:.0f}ms)".format(elapsed))
             return BrainOutput(
                 response="すみません、理解できませんでした",
@@ -1770,6 +1770,12 @@ class ProductionBrain:
         3104 = RPC 超时（动作可能仍在执行），不能视为已完成。
         """
         if api_code == 1004:  # StandUp
+            self.robot_state = "standing"
+            self.last_posture_standing = True
+        elif api_code == 1006:  # RecoveryStand → 站立
+            self.robot_state = "standing"
+            self.last_posture_standing = True
+        elif api_code == 1010:  # RiseSit → 站立
             self.robot_state = "standing"
             self.last_posture_standing = True
         elif api_code == 1009:  # Sit

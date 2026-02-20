@@ -183,7 +183,7 @@ tail -f logs/audit/audit_$(date +%Y%m%d).jsonl | jq '.'
 
 ### Step 1: 环境准备（2分钟）
 ```bash
-cd /home/m1ng/claudia
+cd ~/claudia
 
 # 安装ollama Python库
 pip3 install ollama

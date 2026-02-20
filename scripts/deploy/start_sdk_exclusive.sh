@@ -29,7 +29,7 @@ echo ""
 echo "🔧 配置SDK环境..."
 
 # 设置CycloneDDS环境
-export CYCLONEDDS_HOME="/home/m1ng/claudia/cyclonedds/install"
+export CYCLONEDDS_HOME="$HOME/claudia/cyclonedds/install"
 export LD_LIBRARY_PATH="${CYCLONEDDS_HOME}/lib:$LD_LIBRARY_PATH"
 export RMW_IMPLEMENTATION="rmw_cyclonedds_cpp"
 
@@ -60,7 +60,7 @@ echo "----------------------------------------"
 echo ""
 
 # 启动生产大脑
-cd /home/m1ng/claudia
+cd $HOME/claudia
 python3 production_commander.py
 
 echo ""

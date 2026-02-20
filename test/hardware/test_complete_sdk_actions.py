@@ -11,14 +11,15 @@ import time
 import json
 
 # 添加路径
-sys.path.append('/home/m1ng/claudia')
-sys.path.append('/home/m1ng/claudia/unitree_sdk2_python')
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.append(_PROJECT_ROOT)
+sys.path.append(os.path.join(_PROJECT_ROOT, 'unitree_sdk2_python'))
 
 # 设置环境变量
-os.environ['CYCLONEDDS_HOME'] = '/home/m1ng/claudia/cyclonedds/install'
+os.environ['CYCLONEDDS_HOME'] = os.path.join(_PROJECT_ROOT, 'cyclonedds', 'install')
 ld_path = os.environ.get('LD_LIBRARY_PATH', '')
-cyclone_lib = '/home/m1ng/claudia/cyclonedds/install/lib'
-unitree_lib = '/home/m1ng/claudia/cyclonedds_ws/install/unitree_sdk2/lib'
+cyclone_lib = os.path.join(_PROJECT_ROOT, 'cyclonedds', 'install', 'lib')
+unitree_lib = os.path.join(_PROJECT_ROOT, 'cyclonedds_ws', 'install', 'unitree_sdk2', 'lib')
 if cyclone_lib not in ld_path:
     os.environ['LD_LIBRARY_PATH'] = f"{cyclone_lib}:{unitree_lib}:{ld_path}"
 os.environ['RMW_IMPLEMENTATION'] = 'rmw_cyclonedds_cpp'
@@ -192,7 +193,7 @@ def test_all_actions():
             print(f"   {item}")
     
     # 保存结果
-    result_file = f"/home/m1ng/claudia/test_results_{int(time.time())}.json"
+    result_file = os.path.join(_PROJECT_ROOT, f"test_results_{int(time.time())}.json")
     with open(result_file, 'w', encoding='utf-8') as f:
         json.dump({
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),

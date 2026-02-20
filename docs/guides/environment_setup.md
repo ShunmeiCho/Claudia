@@ -55,7 +55,7 @@ sudo apt install -y ros-foxy-desktop python3-argcomplete
 
 ```bash
 # 进入项目根目录
-cd /home/m1ng/claudia
+cd ~/claudia
 
 # 创建CycloneDDS工作空间（如果不存在的话，已存在则跳过）
 mkdir -p cyclonedds_ws/src
@@ -69,7 +69,7 @@ cd cyclonedds_ws
 
 ```bash
 # 克隆SDK
-cd /home/m1ng/claudia
+cd ~/claudia
 git clone https://github.com/unitreerobotics/unitree_sdk2_python.git
 
 # 安装依赖
@@ -136,7 +136,7 @@ export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 echo "✅ RMW_IMPLEMENTATION设置为: $RMW_IMPLEMENTATION"
 
 # 设置Python路径
-export PYTHONPATH=$PYTHONPATH:/home/m1ng/claudia/unitree_sdk2_python
+export PYTHONPATH=$PYTHONPATH:~/claudia/unitree_sdk2_python
 echo "✅ Python路径已设置"
 
 echo "🎉 环境设置完成！可以运行Unitree测试了"

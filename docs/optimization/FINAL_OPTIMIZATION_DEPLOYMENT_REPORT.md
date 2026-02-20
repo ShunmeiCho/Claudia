@@ -242,7 +242,7 @@ scripts/llm/
 - 监控面板: 企业级实时监控能力
 
 ### 联系与支持
-- 项目仓库: `/home/m1ng/claudia`
+- 项目仓库: `~/claudia`
 - 技术栈: FastAPI + Redis + Ollama + Qwen2.5-7B
 - 平台环境: NVIDIA Jetson AGX Orin
 

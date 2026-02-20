@@ -15,7 +15,7 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # 项目路径
-PROJECT_ROOT="/home/m1ng/claudia"
+PROJECT_ROOT="$HOME/claudia"
 TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
 
 echo -e "${CYAN}======================================${NC}"
@@ -166,7 +166,7 @@ create_launcher_scripts() {
 #!/bin/bash
 # Claudia优化控制系统启动器
 
-cd /home/m1ng/claudia
+cd $HOME/claudia
 
 # 设置环境
 source scripts/setup/setup_cyclonedds.sh

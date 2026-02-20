@@ -48,7 +48,8 @@ class LEDTestBase(unittest.TestCase):
         try:
             # 检查必要的模块是否可用
             import sys
-            sys.path.append('/home/m1ng/claudia/src')
+            _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+            sys.path.append(os.path.join(_project_root, 'src'))
             
             # 检查Unitree硬件是否可用
             from claudia.robot_controller.unitree_messages import UnitreeMessages

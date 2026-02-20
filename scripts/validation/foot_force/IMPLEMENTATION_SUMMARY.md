@@ -176,7 +176,7 @@ scripts/validation/foot_force/
 
 ### 1. 快速框架测试
 ```bash
-cd /home/m1ng/claudia
+cd ~/claudia
 python3 scripts/validation/foot_force/test_abcd_framework.py
 ```
 **用途**: 验证所有组件和依赖是否正常工作

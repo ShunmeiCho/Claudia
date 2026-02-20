@@ -3,7 +3,7 @@
 
 set -e
 
-cd /home/m1ng/claudia
+cd $HOME/claudia
 
 echo "=================================="
 echo "🔬 Track B: 新模型部署"

@@ -10,7 +10,8 @@ import time
 import os
 
 # Add project path
-sys.path.insert(0, '/home/m1ng/claudia/src')
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+sys.path.insert(0, os.path.join(_PROJECT_ROOT, 'src'))
 
 def test_sportmode_data():
     """Test reading SportMode data"""

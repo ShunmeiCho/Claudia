@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # Test different LowState_ initialization approaches
 import sys
-sys.path.insert(0, '/home/m1ng/claudia/src')
+import os
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+sys.path.insert(0, os.path.join(_PROJECT_ROOT, 'src'))
 
 def test_lowstate_approaches():
     """Test various LowState_ initialization methods"""
