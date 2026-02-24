@@ -28,16 +28,41 @@ PROTO_VERSION = "1.0"
 # === Socket 路径 ===
 # セキュリティ: /tmp ではなく $XDG_RUNTIME_DIR (通常 /run/user/<uid>, 0700) を使用。
 # 同一ユーザー以外のアクセスを OS レベルで遮断する。
-# $XDG_RUNTIME_DIR が未設定の場合のみ /tmp にフォールバック（0o600 パーミッション付き）。
+# $XDG_RUNTIME_DIR が未設定/不可書の場合は /tmp/claudia_ipc_<uid> にフォールバック。
+# UID サフィックスにより、マルチユーザー環境でもディレクトリ衝突を回避する。
 def _socket_dir():
     # type: () -> str
+    candidates = []
+
+    # 優先: $XDG_RUNTIME_DIR/claudia (OS レベル 0700 保証)
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if runtime and os.path.isdir(runtime):
-        d = os.path.join(runtime, "claudia")
-    else:
-        d = "/tmp/claudia_ipc"
-    os.makedirs(d, mode=0o700, exist_ok=True)
-    return d
+        candidates.append(os.path.join(runtime, "claudia"))
+
+    # フォールバック: /tmp/claudia_ipc_<uid> (UID 隔離)
+    candidates.append("/tmp/claudia_ipc_{}".format(os.getuid()))
+
+    for d in candidates:
+        try:
+            os.makedirs(d, mode=0o700, exist_ok=True)
+            # 既存ディレクトリのパーミッションを強制修復
+            # (他ユーザーが先に緩いパーミッションで作成した場合の防御)
+            dir_stat = os.stat(d)
+            if dir_stat.st_uid != os.getuid():
+                # 他ユーザー所有のディレクトリは使用しない
+                logger.warning("ソケットディレクトリ %s は他ユーザー所有、スキップ", d)
+                continue
+            if stat.S_IMODE(dir_stat.st_mode) != 0o700:
+                os.chmod(d, 0o700)
+            return d
+        except OSError as e:
+            logger.warning("ソケットディレクトリ作成失敗: %s: %s", d, e)
+            continue
+
+    # 全候補失敗 — 最終手段として例外を投げる
+    raise RuntimeError(
+        "IPC ソケットディレクトリを作成できません: {}".format(candidates)
+    )
 
 _SOCK_DIR = _socket_dir()
 AUDIO_SOCKET = os.path.join(_SOCK_DIR, "audio.sock")
