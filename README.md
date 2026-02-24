@@ -2,6 +2,8 @@
 
 <p align="center">
   <img src="docs/images/cover.jpg" alt="Claudia — Unitree Go2 with LLM Brain" width="800">
+  <br>
+  <sub>Image credit: <a href="https://www.unitree.com/go2">Unitree Robotics</a></sub>
 </p>
 
 # Claudia — LLM-Brained Robot Intelligence
@@ -172,6 +174,8 @@ Claudia> 量子力学について教えて → Conversational response (no actio
 
 <p align="center">
   <img src="docs/images/go2-hardware.jpg" alt="Unitree Go2 Hardware Overview" width="800">
+  <br>
+  <sub>Image credit: <a href="https://www.unitree.com/go2">Unitree Robotics</a></sub>
 </p>
 
 Claudia runs on a **Unitree Go2** quadruped robot with an external **NVIDIA Jetson Orin NX** as the AI compute module:
@@ -397,5 +401,3 @@ curl http://localhost:11434/api/tags         # Ollama health check
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
-
-*Last updated: 2026-02-20*

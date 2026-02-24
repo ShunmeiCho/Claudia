@@ -2,6 +2,8 @@
 
 <p align="center">
   <img src="docs/images/cover.jpg" alt="Claudia — Unitree Go2 LLM頭脳ロボット" width="800">
+  <br>
+  <sub>画像提供: <a href="https://www.unitree.com/go2">Unitree Robotics</a></sub>
 </p>
 
 # Claudia — LLM頭脳ロボットインテリジェンス
@@ -172,6 +174,8 @@ Claudia> 量子力学について教えて → 会話応答（動作なし）
 
 <p align="center">
   <img src="docs/images/go2-hardware.jpg" alt="Unitree Go2 ハードウェア構成" width="800">
+  <br>
+  <sub>画像提供: <a href="https://www.unitree.com/go2">Unitree Robotics</a></sub>
 </p>
 
 Claudia は **Unitree Go2** 四足歩行ロボット上で、外付け **NVIDIA Jetson Orin NX** を AI 計算モジュールとして動作します:
@@ -389,5 +393,3 @@ mypy src/
 ## ライセンス
 
 MIT License — 詳細は[LICENSE](LICENSE)を参照。
-
-*最終更新: 2026-02-20*
