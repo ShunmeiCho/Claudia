@@ -449,17 +449,27 @@ class TestSocketDirBranches:
         assert result == "/tmp/claudia_ipc_{}".format(uid)
 
     def test_xdg_unwritable_falls_back_to_tmp(self, tmp_path, monkeypatch):
-        """XDG_RUNTIME_DIR が不可書の場合フォールバック"""
+        """XDG 配下の makedirs が OSError → /tmp フォールバック
+
+        chmod 0o500 は root/CAP_DAC_OVERRIDE で無視されるため、
+        monkeypatch で makedirs を直接失敗させて確実にテストする。
+        """
         import claudia.audio.asr_service.ipc_protocol as proto
-        # 存在するが書き込めないディレクトリをシミュレート
-        unwritable = str(tmp_path / "no_write")
-        os.makedirs(unwritable, mode=0o500)
-        monkeypatch.setenv("XDG_RUNTIME_DIR", unwritable)
+        xdg_dir = str(tmp_path / "fake_xdg")
+        os.makedirs(xdg_dir, mode=0o700)
+        monkeypatch.setenv("XDG_RUNTIME_DIR", xdg_dir)
+        xdg_candidate = os.path.join(xdg_dir, "claudia")
+        _real_makedirs = os.makedirs
+
+        def _failing_makedirs(path, **kwargs):
+            if path == xdg_candidate:
+                raise OSError(13, "Permission denied", path)
+            return _real_makedirs(path, **kwargs)
+
+        monkeypatch.setattr(os, "makedirs", _failing_makedirs)
         result = proto._socket_dir()
         uid = os.getuid()
         assert result == "/tmp/claudia_ipc_{}".format(uid)
-        # cleanup
-        os.chmod(unwritable, 0o700)
 
     def test_symlink_rejected(self, tmp_path, monkeypatch):
         """symlink ディレクトリは拒否され次の候補にフォールバック"""
@@ -488,16 +498,38 @@ class TestSocketDirBranches:
             if backup:
                 os.rename(backup, target_name)
 
-    def test_other_user_dir_skipped(self, tmp_path):
-        """他ユーザー所有ディレクトリはスキップされる
+    def test_other_user_dir_skipped(self, tmp_path, monkeypatch):
+        """他ユーザー所有ディレクトリはスキップされ次の候補へ
 
-        注意: root 以外では他ユーザーの UID を偽装できないため、
-        uid 不一致のロジックを間接的に検証する。
+        非 root では他 UID のディレクトリを作れないため、
+        os.lstat の返り値を monkeypatch で偽装する。
         """
         import claudia.audio.asr_service.ipc_protocol as proto
-        dir_lstat = os.lstat(str(tmp_path))
-        # tmp_path は現在ユーザー所有なので owner 検査を通過する
-        assert dir_lstat.st_uid == os.getuid()
+        monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+        uid = os.getuid()
+        target_name = "/tmp/claudia_ipc_{}".format(uid)
+        _real_lstat = os.lstat
+
+        class _FakeStat:
+            """1 回目の lstat だけ他ユーザー UID を返す"""
+            def __init__(self, real):
+                self.st_mode = real.st_mode
+                self.st_uid = uid + 1  # 他ユーザー偽装
+                self.st_size = real.st_size
+
+        call_count = [0]
+
+        def _patched_lstat(path):
+            result = _real_lstat(path)
+            if path == target_name and call_count[0] == 0:
+                call_count[0] += 1
+                return _FakeStat(result)
+            return result
+
+        monkeypatch.setattr(os, "lstat", _patched_lstat)
+        # 唯一の候補 (/tmp/claudia_ipc_<uid>) が owner 不一致でスキップ → RuntimeError
+        with pytest.raises(RuntimeError):
+            proto._socket_dir()
 
     def test_permissions_repaired(self, tmp_path, monkeypatch):
         """0o700 以外のパーミッションは自動修復される"""
