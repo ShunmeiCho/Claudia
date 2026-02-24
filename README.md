@@ -15,9 +15,17 @@
 
 ## Demo
 
-<!-- TODO: Add video demo -->
+<!-- TODO: Replace with actual video links after recording -->
 
-> Video demo coming soon — voice commands, real-time robot execution, config panel walkthrough.
+> Videos coming soon — see [Demo Video Plan](docs/DEMO_VIDEO_PLAN.md) for the recording checklist.
+
+| Demo | Description | Status |
+|------|-------------|--------|
+| **Hero Demo** | End-to-end: Japanese commands → LLM semantic understanding → robot action | Planned |
+| **Voice Pipeline** | USB mic → ASR → LLM → SafetyCompiler → execution chain | Planned |
+| **Multilingual** | Same robot controlled in Japanese, Chinese, and English | Planned |
+| **Safety System** | Battery gating, standing prerequisites, emergency stop | Planned |
+| **Action Showcase** | All 18 performance actions in quick-cut montage | Planned |
 
 ---
 
