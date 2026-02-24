@@ -26,17 +26,34 @@
 ### Go2 in Action
 
 <p align="center">
-  <img src="docs/images/go2-dance.gif" alt="Dance" width="260">
-  <img src="docs/images/go2-flip.gif" alt="Flip" width="260">
-  <img src="docs/images/go2-run.gif" alt="Run" width="260">
+  <a href="https://youtu.be/8gaULsglOQE"><img src="docs/images/go2-dance.gif" alt="Dance" width="260"></a>
+  <a href="https://youtu.be/DXRojz4N8K8"><img src="docs/images/go2-flip.gif" alt="Flip" width="260"></a>
+  <a href="https://youtu.be/8ReuPIKcydw"><img src="docs/images/go2-run.gif" alt="Run" width="260"></a>
 </p>
 <p align="center">
-  <img src="docs/images/go2-avoid.gif" alt="Obstacle Avoidance" width="260">
-  <img src="docs/images/go2-lidar.gif" alt="4D LiDAR" width="260">
+  <a href="https://youtu.be/F1JtFksc_k0"><img src="docs/images/go2-avoid.gif" alt="Obstacle Avoidance" width="260"></a>
+  <a href="https://youtu.be/rjVfRanqUC4"><img src="docs/images/go2-lidar.gif" alt="4D LiDAR" width="260"></a>
 </p>
-<p align="center">
-  <sub>GIF source: <a href="https://www.unitree.com/go2">Unitree Robotics</a></sub>
-</p>
+
+<details>
+<summary>All Go2 videos (click to expand)</summary>
+
+| Video | Link |
+|-------|------|
+| Dance Performance | [YouTube](https://youtu.be/8gaULsglOQE) |
+| Front Flip & Acrobatics | [YouTube](https://youtu.be/DXRojz4N8K8) |
+| High-Speed Running | [YouTube](https://youtu.be/8ReuPIKcydw) |
+| Obstacle Avoidance | [YouTube](https://youtu.be/F1JtFksc_k0) |
+| 4D LiDAR Mapping | [YouTube](https://youtu.be/rjVfRanqUC4) |
+| Performance Overview | [YouTube](https://youtu.be/N6burwXML70) |
+| Battery & Endurance | [YouTube](https://youtu.be/klw6Hvu4EzI) |
+| Mobile App Control | [YouTube](https://youtu.be/IM2MKeuHtu4) |
+
+<sub>All footage from <a href="https://www.unitree.com/go2">Unitree Robotics official website</a>. Used for educational/research demonstration purposes.</sub>
+
+</details>
+
+### Claudia Demos
 
 | Demo | Description | Status |
 |------|-------------|--------|

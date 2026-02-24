@@ -26,17 +26,34 @@
 ### Go2 動作プレビュー
 
 <p align="center">
-  <img src="docs/images/go2-dance.gif" alt="ダンス" width="260">
-  <img src="docs/images/go2-flip.gif" alt="バク転" width="260">
-  <img src="docs/images/go2-run.gif" alt="走行" width="260">
+  <a href="https://youtu.be/8gaULsglOQE"><img src="docs/images/go2-dance.gif" alt="ダンス" width="260"></a>
+  <a href="https://youtu.be/DXRojz4N8K8"><img src="docs/images/go2-flip.gif" alt="バク転" width="260"></a>
+  <a href="https://youtu.be/8ReuPIKcydw"><img src="docs/images/go2-run.gif" alt="走行" width="260"></a>
 </p>
 <p align="center">
-  <img src="docs/images/go2-avoid.gif" alt="障害物回避" width="260">
-  <img src="docs/images/go2-lidar.gif" alt="4D LiDAR" width="260">
+  <a href="https://youtu.be/F1JtFksc_k0"><img src="docs/images/go2-avoid.gif" alt="障害物回避" width="260"></a>
+  <a href="https://youtu.be/rjVfRanqUC4"><img src="docs/images/go2-lidar.gif" alt="4D LiDAR" width="260"></a>
 </p>
-<p align="center">
-  <sub>GIF 提供: <a href="https://www.unitree.com/go2">Unitree Robotics</a></sub>
-</p>
+
+<details>
+<summary>Go2 全動画一覧（クリックで展開）</summary>
+
+| 動画 | リンク |
+|------|--------|
+| ダンスパフォーマンス | [YouTube](https://youtu.be/8gaULsglOQE) |
+| フロントフリップ | [YouTube](https://youtu.be/DXRojz4N8K8) |
+| 高速走行 | [YouTube](https://youtu.be/8ReuPIKcydw) |
+| 障害物回避 | [YouTube](https://youtu.be/F1JtFksc_k0) |
+| 4D LiDAR マッピング | [YouTube](https://youtu.be/rjVfRanqUC4) |
+| 性能概要 | [YouTube](https://youtu.be/N6burwXML70) |
+| バッテリー＆持久力 | [YouTube](https://youtu.be/klw6Hvu4EzI) |
+| モバイルアプリ操作 | [YouTube](https://youtu.be/IM2MKeuHtu4) |
+
+<sub>全映像は <a href="https://www.unitree.com/go2">Unitree Robotics 公式サイト</a>より。教育・研究デモ目的で使用。</sub>
+
+</details>
+
+### Claudia デモ
 
 | デモ | 内容 | 状態 |
 |------|------|------|

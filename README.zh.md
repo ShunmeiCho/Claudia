@@ -26,17 +26,34 @@
 ### Go2 动作预览
 
 <p align="center">
-  <img src="docs/images/go2-dance.gif" alt="舞蹈" width="260">
-  <img src="docs/images/go2-flip.gif" alt="空翻" width="260">
-  <img src="docs/images/go2-run.gif" alt="奔跑" width="260">
+  <a href="https://youtu.be/8gaULsglOQE"><img src="docs/images/go2-dance.gif" alt="舞蹈" width="260"></a>
+  <a href="https://youtu.be/DXRojz4N8K8"><img src="docs/images/go2-flip.gif" alt="空翻" width="260"></a>
+  <a href="https://youtu.be/8ReuPIKcydw"><img src="docs/images/go2-run.gif" alt="奔跑" width="260"></a>
 </p>
 <p align="center">
-  <img src="docs/images/go2-avoid.gif" alt="障碍回避" width="260">
-  <img src="docs/images/go2-lidar.gif" alt="4D LiDAR" width="260">
+  <a href="https://youtu.be/F1JtFksc_k0"><img src="docs/images/go2-avoid.gif" alt="障碍回避" width="260"></a>
+  <a href="https://youtu.be/rjVfRanqUC4"><img src="docs/images/go2-lidar.gif" alt="4D LiDAR" width="260"></a>
 </p>
-<p align="center">
-  <sub>GIF 来源: <a href="https://www.unitree.com/go2">Unitree Robotics</a></sub>
-</p>
+
+<details>
+<summary>Go2 全部视频（点击展开）</summary>
+
+| 视频 | 链接 |
+|------|------|
+| 舞蹈表演 | [YouTube](https://youtu.be/8gaULsglOQE) |
+| 前空翻 | [YouTube](https://youtu.be/DXRojz4N8K8) |
+| 高速奔跑 | [YouTube](https://youtu.be/8ReuPIKcydw) |
+| 障碍回避 | [YouTube](https://youtu.be/F1JtFksc_k0) |
+| 4D LiDAR 建图 | [YouTube](https://youtu.be/rjVfRanqUC4) |
+| 性能总览 | [YouTube](https://youtu.be/N6burwXML70) |
+| 续航测试 | [YouTube](https://youtu.be/klw6Hvu4EzI) |
+| 手机 APP 控制 | [YouTube](https://youtu.be/IM2MKeuHtu4) |
+
+<sub>全部影像来自 <a href="https://www.unitree.com/go2">Unitree Robotics 官网</a>，仅用于教育/研究演示目的。</sub>
+
+</details>
+
+### Claudia 演示
 
 | 演示 | 内容 | 状态 |
 |------|------|------|
