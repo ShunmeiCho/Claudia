@@ -45,14 +45,17 @@ def _socket_dir():
     for d in candidates:
         try:
             os.makedirs(d, mode=0o700, exist_ok=True)
-            # 既存ディレクトリのパーミッションを強制修復
-            # (他ユーザーが先に緩いパーミッションで作成した場合の防御)
-            dir_stat = os.stat(d)
-            if dir_stat.st_uid != os.getuid():
-                # 他ユーザー所有のディレクトリは使用しない
+            # symlink 拒否: os.stat() は symlink を辿るため、攻撃者が
+            # /tmp/claudia_ipc_<uid> → /target を仕掛けると owner 検査を
+            # バイパスされる。lstat で symlink 自体を検査し拒否する。
+            dir_lstat = os.lstat(d)
+            if stat.S_ISLNK(dir_lstat.st_mode):
+                logger.warning("ソケットディレクトリ %s は symlink、拒否", d)
+                continue
+            if dir_lstat.st_uid != os.getuid():
                 logger.warning("ソケットディレクトリ %s は他ユーザー所有、スキップ", d)
                 continue
-            if stat.S_IMODE(dir_stat.st_mode) != 0o700:
+            if stat.S_IMODE(dir_lstat.st_mode) != 0o700:
                 os.chmod(d, 0o700)
             return d
         except OSError as e:
