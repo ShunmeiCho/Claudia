@@ -259,13 +259,14 @@ class TestSDKStateProviderCache:
         assert call_count[0] > 0
 
     def test_polling_start_stop(self):
-        """轮询启停不崩溃"""
+        """轮询启停不崩溃，stop_polling 可快速唤醒轮询线程"""
         provider = self._make_provider()
         provider.start_polling(interval=0.1)
-        assert provider._polling is True
+        assert not provider._stop_event.is_set()
+        assert provider._poll_thread is not None and provider._poll_thread.is_alive()
         time.sleep(0.3)
         provider.stop_polling()
-        assert provider._polling is False
+        assert provider._stop_event.is_set()
 
     def test_consecutive_failures_switch_to_fallback(self):
         """连续失败 → 缓存切换到 conservative fallback"""

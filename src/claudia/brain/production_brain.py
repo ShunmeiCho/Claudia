@@ -640,6 +640,31 @@ class ProductionBrain:
         "停下": "止まります",
     }
 
+    # === 序列预定义（避免 LLM 调用的常见组合动作）===
+    # process_command 每次调用时引用此 dict，不再每次重建。
+    SEQUENCE_HOTPATH = {
+        # 站立+动作系列
+        '立ってから挨拶': [1004, 1016],
+        '立って挨拶': [1004, 1016],
+        '立ってそして挨拶': [1004, 1016],
+        '立ってこんにちは': [1004, 1016],
+        '立ってからハート': [1004, 1036],
+        '立ってハート': [1004, 1036],
+        '立ってダンス': [1004, 1023],
+        '立ってから踊る': [1004, 1023],
+        # 坐下+动作系列
+        '座ってから挨拶': [1009, 1016],
+        '座って挨拶': [1009, 1016],
+        '座ってこんにちは': [1009, 1016],
+        # 英文
+        'stand and hello': [1004, 1016],
+        'stand then hello': [1004, 1016],
+        'sit and hello': [1009, 1016],
+        # 中文
+        '站立然后问好': [1004, 1016],
+        '坐下然后问好': [1009, 1016],
+    }
+
     async def process_and_execute(self, command):
         # type: (str) -> BrainOutput
         """原子化命令处理+执行入口（PR1 引入框架，PR2 强制所有入口使用）
@@ -724,31 +749,28 @@ class ProductionBrain:
         """判断是否为复杂指令"""
         return any(keyword in command for keyword in self.sequence_keywords)
     
-    def _call_ollama(self, model: str, command: str, timeout: int = 10) -> Optional[Dict]:
-        """遗留 subprocess 调用路径（已废弃）。
-
-        此方法仅在 ollama Python 包不可用时被 _call_ollama_v2 回调。
-        由于 shell=True 存在命令注入风险，现已移除实现，直接返回 None。
-        生产环境必须安装 ollama Python 包。
-        """
-        self.logger.error("ollama Python 包不可用，无法调用 LLM。请安装: pip install ollama")
-        return None
-
     def _normalize_battery(self, level):
         # type: (Optional[float]) -> Optional[float]
-        """电量透传（不做自动 /100 修正）
+        """电量归一化: 传感器精度边界值 clamp 到 1.0
 
-        SafetyCompiler.compile() 会对 >1.0 做 fail-safe 拒绝，
-        迫使上游（state_monitor / _normalize_battery 调用方）修正数据源。
-        自动 /100 会掩盖上游归一化 bug，因此移除。
+        >1.0 的值（如 1.01）可能来自传感器精度误差。直接透传会导致
+        SafetyCompiler fail-safe 拒绝所有动作，影响可用性。
+        此处 clamp 到 1.0 并记录 warning，兼顾安全和可用性。
+        明显异常值 (>1.5) 仍记录 error 以便排查上游 bug。
         """
         if level is None:
             return None
         if level > 1.0:
-            self.logger.error(
-                "battery_level={} > 1.0，上游归一化异常！"
-                "SafetyCompiler 将 fail-safe 拒绝所有动作".format(level)
-            )
+            if level > 1.5:
+                self.logger.error(
+                    "battery_level={} >> 1.0，上游归一化异常！"
+                    "clamp 至 1.0 但需排查数据源".format(level)
+                )
+            else:
+                self.logger.warning(
+                    "battery_level={} > 1.0 (传感器精度)，clamp 至 1.0".format(level)
+                )
+            return 1.0
         return level
 
     def _sanitize_response(self, r: str) -> str:
@@ -1038,8 +1060,8 @@ class ProductionBrain:
                           dict = JSON Schema 结构化输出（Action 通道用 ACTION_SCHEMA）
         """
         if not OLLAMA_AVAILABLE:
-            self.logger.warning("ollama库不可用，使用旧方法")
-            return self._call_ollama(model, command, timeout)
+            self.logger.error("ollama Python 包不可用，无法调用 LLM。请安装: pip install ollama")
+            return None
 
         # 闭包捕获: 将参数绑定到局部变量供 _sync_ollama_call 使用
         _num_predict = num_predict
@@ -1317,20 +1339,15 @@ class ProductionBrain:
                 )
 
         # 0. 紧急指令快速通道 — 引用 EMERGENCY_COMMANDS 唯一真源
+        # 注: process_and_execute() 已在上层拦截紧急命令并调用 _handle_emergency。
+        # 此处是防御性检查，防止直接调用 process_command 时遗漏紧急处理。
         cmd_emergency = command.strip().lower().rstrip(self._TRAILING_PUNCTUATION)
         if cmd_emergency in self.EMERGENCY_COMMANDS:
-            elapsed = (time.monotonic() - start_time) * 1000
-            self.logger.info("紧急指令旁路 ({:.0f}ms)".format(elapsed))
-            output = BrainOutput(
-                response=self.EMERGENCY_COMMANDS[cmd_emergency],
-                api_code=1003,
-                reasoning="emergency_bypass",
+            self.logger.warning(
+                "process_command に直接紧急指令が到達 — "
+                "process_and_execute() 経由を推奨"
             )
-            self._log_audit(command, output, route=ROUTE_EMERGENCY, elapsed_ms=elapsed,
-                          cache_hit=False, model_used="bypass",
-                          current_state=None, llm_output=None,
-                          safety_verdict="emergency_bypass")
-            return output
+            return await self._handle_emergency(command)
 
         # ===== 2) 安全预检 — DEPRECATED (SafetyCompiler 统一处理) =====
         # _quick_safety_precheck 已被 SafetyCompiler 取代。
@@ -1422,35 +1439,9 @@ class ProductionBrain:
 
         # ===== 3.3) 常见序列预定义（避免LLM调用） =====
         cmd_lower = command.strip().lower()
-        SEQUENCE_HOTPATH = {
-            # 站立+动作系列
-            '立ってから挨拶': [1004, 1016],
-            '立って挨拶': [1004, 1016],
-            '立ってそして挨拶': [1004, 1016],
-            '立ってこんにちは': [1004, 1016],
-            '立ってからハート': [1004, 1036],
-            '立ってハート': [1004, 1036],
-            '立ってダンス': [1004, 1023],
-            '立ってから踊る': [1004, 1023],
-
-            # 坐下+动作系列
-            '座ってから挨拶': [1009, 1016],
-            '座って挨拶': [1009, 1016],
-            '座ってこんにちは': [1009, 1016],
-
-            # 英文
-            'stand and hello': [1004, 1016],
-            'stand then hello': [1004, 1016],
-            'sit and hello': [1009, 1016],
-
-            # 中文
-            '站立然后问好': [1004, 1016],
-            '坐下然后问好': [1009, 1016],
-        }
-
         # ASR かな正規化: "たってからあいさつ" → "立ってから挨拶"
         cmd_normalized = self._kana_to_kanji(cmd_lower)
-        for key, seq in SEQUENCE_HOTPATH.items():
+        for key, seq in self.SEQUENCE_HOTPATH.items():
             if key in cmd_normalized:
                 self.logger.info("序列预定义命中: {} -> {}".format(key, seq))
 

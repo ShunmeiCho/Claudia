@@ -52,7 +52,13 @@ class AuditLogger:
             log_dir: 日志目录
             max_size_mb: 单个日志文件最大大小（MB）
         """
-        self.log_dir = Path(log_dir)
+        self.log_dir = Path(log_dir).resolve()
+        # 防御路径遍历: 确保解析后的路径仍在预期的工作目录下
+        _cwd = Path.cwd().resolve()
+        if not str(self.log_dir).startswith(str(_cwd)):
+            raise ValueError(
+                "审计日志路径 {} 超出工作目录 {} 范围".format(self.log_dir, _cwd)
+            )
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.max_size_bytes = max_size_mb * 1024 * 1024
 

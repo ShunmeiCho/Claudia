@@ -91,7 +91,7 @@ class SDKStateProvider:
         self._consecutive_failures = 0
 
         # 轮询控制
-        self._polling = False
+        self._stop_event = threading.Event()
         self._poll_thread = None
         self._poll_interval = 2.0
 
@@ -238,7 +238,8 @@ class SDKStateProvider:
             cached = self._cached_state
 
         # 缓存过期（>10s）且没有后台轮询 → 触发一次查询
-        if time.time() - cached.timestamp > 10.0 and not self._polling:
+        _polling_active = self._poll_thread is not None and self._poll_thread.is_alive()
+        if time.time() - cached.timestamp > 10.0 and not _polling_active:
             return self.query_state()
 
         return cached
@@ -246,11 +247,11 @@ class SDKStateProvider:
     def start_polling(self, interval=2.0):
         # type: (float) -> None
         """启动后台轮询"""
-        if self._polling:
+        if self._poll_thread and self._poll_thread.is_alive():
             return
 
         self._poll_interval = interval
-        self._polling = True
+        self._stop_event.clear()
         self._poll_thread = threading.Thread(
             target=self._poll_worker,
             daemon=True,
@@ -261,14 +262,14 @@ class SDKStateProvider:
 
     def stop_polling(self):
         """停止后台轮询"""
-        self._polling = False
+        self._stop_event.set()
         if self._poll_thread and self._poll_thread.is_alive():
             self._poll_thread.join(timeout=3.0)
         self.logger.info("SDK 状态轮询已停止")
 
     def _poll_worker(self):
         """后台轮询线程"""
-        while self._polling:
+        while not self._stop_event.is_set():
             try:
                 self.query_state()
             except Exception as e:
@@ -282,4 +283,4 @@ class SDKStateProvider:
                                 self._consecutive_failures
                             )
                         )
-            time.sleep(self._poll_interval)
+            self._stop_event.wait(timeout=self._poll_interval)
