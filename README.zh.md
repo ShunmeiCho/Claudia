@@ -168,6 +168,27 @@ Claudia> 量子力学について教えて → 对话回复（无动作）
 
 ## 架构
 
+### 硬件平台
+
+<p align="center">
+  <img src="docs/images/go2-hardware.jpg" alt="Unitree Go2 硬件构造" width="800">
+</p>
+
+Claudia 运行在 **Unitree Go2** 四足机器人上，外接 **NVIDIA Jetson Orin NX** 作为 AI 计算模块：
+
+| 组件 | 规格 |
+|------|------|
+| **机器人** | Unitree Go2（12 自由度、8000mAh 电池、4D LiDAR L2） |
+| **AI 模块** | NVIDIA Jetson Orin NX 16GB（Developer Kit） |
+| **GPU** | 1024 核 NVIDIA Ampere，612MHz max，CUDA 11.4 |
+| **CPU** | 8 核 Arm Cortex-A78AE（aarch64） |
+| **内存 / 存储** | 16GB LPDDR5 / 512GB NVMe SSD |
+| **操作系统** | Ubuntu 20.04，L4T R35.3.1（JetPack 5.1.1），Python 3.8.10 |
+| **LLM 运行时** | Ollama + Qwen2.5-7B（Q4_K_M，VRAM ~4.7GB） |
+| **ASR** | faster-whisper base（CPU int8，~1.6 秒/句） |
+| **麦克风** | Audio-Technica AT2020USB-XP（44.1kHz → 16kHz 重采样） |
+| **网络** | 以太网（eth0，192.168.123.x）用于机器人 DDS 通信 |
+
 ### 命令处理管线
 
 ```

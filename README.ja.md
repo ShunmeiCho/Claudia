@@ -168,6 +168,27 @@ Claudia> 量子力学について教えて → 会話応答（動作なし）
 
 ## アーキテクチャ
 
+### ハードウェア構成
+
+<p align="center">
+  <img src="docs/images/go2-hardware.jpg" alt="Unitree Go2 ハードウェア構成" width="800">
+</p>
+
+Claudia は **Unitree Go2** 四足歩行ロボット上で、外付け **NVIDIA Jetson Orin NX** を AI 計算モジュールとして動作します:
+
+| コンポーネント | 仕様 |
+|----------------|------|
+| **ロボット** | Unitree Go2（12自由度、8000mAhバッテリー、4D LiDAR L2） |
+| **AIモジュール** | NVIDIA Jetson Orin NX 16GB（Developer Kit） |
+| **GPU** | 1024コア NVIDIA Ampere、612MHz max、CUDA 11.4 |
+| **CPU** | 8コア Arm Cortex-A78AE（aarch64） |
+| **RAM / ストレージ** | 16GB LPDDR5 / 512GB NVMe SSD |
+| **OS** | Ubuntu 20.04、L4T R35.3.1（JetPack 5.1.1）、Python 3.8.10 |
+| **LLMランタイム** | Ollama + Qwen2.5-7B（Q4_K_M、VRAM ~4.7GB） |
+| **ASR** | faster-whisper base（CPU int8、~1.6秒/発話） |
+| **マイク** | Audio-Technica AT2020USB-XP（44.1kHz → 16kHz リサンプル） |
+| **ネットワーク** | Ethernet（eth0、192.168.123.x）ロボット DDS 通信用 |
+
 ### コマンド処理パイプライン
 
 ```

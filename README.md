@@ -168,6 +168,27 @@ Claudia> 量子力学について教えて → Conversational response (no actio
 
 ## Architecture
 
+### Hardware Platform
+
+<p align="center">
+  <img src="docs/images/go2-hardware.jpg" alt="Unitree Go2 Hardware Overview" width="800">
+</p>
+
+Claudia runs on a **Unitree Go2** quadruped robot with an external **NVIDIA Jetson Orin NX** as the AI compute module:
+
+| Component | Specification |
+|-----------|---------------|
+| **Robot** | Unitree Go2 (12-DOF, 8000mAh battery, 4D LiDAR L2) |
+| **AI Module** | NVIDIA Jetson Orin NX 16GB (Developer Kit) |
+| **GPU** | 1024-core NVIDIA Ampere, 612MHz max, CUDA 11.4 |
+| **CPU** | 8-core Arm Cortex-A78AE (aarch64) |
+| **RAM / Storage** | 16GB LPDDR5 / 512GB NVMe SSD |
+| **OS** | Ubuntu 20.04, L4T R35.3.1 (JetPack 5.1.1), Python 3.8.10 |
+| **LLM Runtime** | Ollama + Qwen2.5-7B (Q4_K_M, ~4.7GB VRAM) |
+| **ASR** | faster-whisper base (CPU int8, ~1.6s/utterance) |
+| **Microphone** | Audio-Technica AT2020USB-XP (44.1kHz → 16kHz resample) |
+| **Network** | Ethernet (eth0, 192.168.123.x) for robot DDS communication |
+
 ### Command Processing Pipeline
 
 ```
