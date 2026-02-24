@@ -19,6 +19,7 @@ import logging
 import math
 import os
 import signal
+import stat
 import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -315,7 +316,7 @@ class ASRServer:
             if os.path.exists(sock_path):
                 os.unlink(sock_path)
 
-        # 4. 启动 3 路 UDS 服务器
+        # 4. 启动 3 路 UDS 服务器 (创建后限制权限为 owner-only)
         self._result_server = await asyncio.start_unix_server(
             self._handle_result_connection, path=RESULT_SOCKET,
         )
@@ -325,6 +326,11 @@ class ASRServer:
         self._ctrl_server = await asyncio.start_unix_server(
             self._handle_ctrl_connection, path=CTRL_SOCKET,
         )
+        for sock_path in (AUDIO_SOCKET, RESULT_SOCKET, CTRL_SOCKET):
+            try:
+                os.chmod(sock_path, stat.S_IRUSR | stat.S_IWUSR)  # 0o600
+            except OSError as e:
+                logger.warning("socket パーミッション設定失敗: %s: %s", sock_path, e)
 
         self._running = True
 

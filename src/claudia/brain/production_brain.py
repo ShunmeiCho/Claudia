@@ -930,6 +930,22 @@ class ProductionBrain:
         # 默认对话回复
         return "はい、何でしょうか？"
 
+    def _compile_safety(self, candidate, state_snapshot, snapshot_monotonic_ts):
+        # type: (List[int], Optional[Any], Optional[float]) -> SafetyVerdict
+        """SafetyCompiler 统一调用封装 — 从 state_snapshot 提取参数
+
+        fail-closed 策略: state_snapshot=None → battery=0.0, is_standing=False，
+        只有 SAFE_ACTIONS 能通过。
+        """
+        _batt = state_snapshot.battery_level if state_snapshot else 0.0
+        _stand = state_snapshot.is_standing if state_snapshot else False
+        _ts = snapshot_monotonic_ts if state_snapshot else None
+        if not state_snapshot:
+            self.logger.warning("状態監視なし: fail-safe安全コンパイル (battery=0.0)")
+        return self.safety_compiler.compile(
+            candidate, _batt, _stand, snapshot_timestamp=_ts,
+        )
+
     def _verify_action_model(self):
         # type: () -> bool
         """验证 Action 模型是否可用（启动时一次性检查）"""
@@ -1090,14 +1106,8 @@ class ProductionBrain:
         candidate = sequence if sequence else ([api_code] if api_code else [])
 
         if candidate:
-            _batt = state_snapshot.battery_level if state_snapshot else 0.0
-            _stand = state_snapshot.is_standing if state_snapshot else False
-            _ts = snapshot_monotonic_ts if state_snapshot else None
-            if not state_snapshot:
-                self.logger.warning("状態監視なし: fail-safe安全コンパイル (battery=0.0)")
-            verdict = self.safety_compiler.compile(
-                candidate, _batt, _stand, snapshot_timestamp=_ts,
-            )
+            verdict = self._compile_safety(
+                candidate, state_snapshot, snapshot_monotonic_ts)
             if verdict.is_blocked:
                 self.logger.warning("路由器路径安全拒绝: {}".format(verdict.block_reason))
                 elapsed = (time.monotonic() - start_time) * 1000
@@ -1133,6 +1143,14 @@ class ProductionBrain:
             if verdict.warnings:
                 for w in verdict.warnings:
                     self.logger.info("SafetyCompiler: {}".format(w))
+
+            # SafetyCompiler が降級/自動前挿した場合、応答テンプレートを再生成
+            # （元の応答が "前転します" でも実際は Dance2 に降級されたケースを修正）
+            if exec_seq != candidate:
+                if final_sequence:
+                    response = get_response_for_sequence(final_sequence)
+                elif final_api is not None:
+                    response = get_response_for_action(final_api)
         else:
             final_api = api_code
             final_sequence = sequence
@@ -1351,16 +1369,8 @@ class ProductionBrain:
             candidate = sequence if sequence else ([api_code] if api_code else [])
 
             if candidate:
-                # fail-closed: state_snapshot=None → battery=0.0, is_standing=False
-                # 只有 SAFE_ACTIONS 能通过（电量门控 ≤0.10 策略）
-                _batt = state_snapshot.battery_level if state_snapshot else 0.0
-                _stand = state_snapshot.is_standing if state_snapshot else False
-                _ts = snapshot_monotonic_ts if state_snapshot else None
-                if not state_snapshot:
-                    self.logger.warning("状態監視なし: fail-safe安全コンパイル (battery=0.0)")
-                verdict = self.safety_compiler.compile(
-                    candidate, _batt, _stand, snapshot_timestamp=_ts,
-                )
+                verdict = self._compile_safety(
+                    candidate, state_snapshot, snapshot_monotonic_ts)
                 if verdict.is_blocked:
                     self.logger.warning("热路径安全拒绝: {}".format(verdict.block_reason))
                     elapsed = (time.monotonic() - start_time) * 1000
@@ -1445,15 +1455,8 @@ class ProductionBrain:
                 self.logger.info("序列预定义命中: {} -> {}".format(key, seq))
 
                 # P0-9: 序列路径必须走 SafetyCompiler（旧版无安全检查）
-                # fail-closed: state_snapshot=None → battery=0.0, is_standing=False
-                _batt = state_snapshot.battery_level if state_snapshot else 0.0
-                _stand = state_snapshot.is_standing if state_snapshot else False
-                _ts = snapshot_monotonic_ts if state_snapshot else None
-                if not state_snapshot:
-                    self.logger.warning("状態監視なし: fail-safe安全コンパイル (battery=0.0)")
-                verdict = self.safety_compiler.compile(
-                    seq, _batt, _stand, snapshot_timestamp=_ts,
-                )
+                verdict = self._compile_safety(
+                    seq, state_snapshot, snapshot_monotonic_ts)
                 if verdict.is_blocked:
                     self.logger.warning("序列安全拒绝: {}".format(verdict.block_reason))
                     elapsed = (time.monotonic() - start_time) * 1000
@@ -1517,15 +1520,8 @@ class ProductionBrain:
             dance_choice = random.choice([1022, 1023])
             dance_name = "1" if dance_choice == 1022 else "2"
 
-            # fail-closed: state_snapshot=None → battery=0.0, is_standing=False
-            _batt = state_snapshot.battery_level if state_snapshot else 0.0
-            _stand = state_snapshot.is_standing if state_snapshot else False
-            _ts = snapshot_monotonic_ts if state_snapshot else None
-            if not state_snapshot:
-                self.logger.warning("状態監視なし: fail-safe安全コンパイル (battery=0.0)")
-            verdict = self.safety_compiler.compile(
-                [dance_choice], _batt, _stand, snapshot_timestamp=_ts,
-            )
+            verdict = self._compile_safety(
+                [dance_choice], state_snapshot, snapshot_monotonic_ts)
             if verdict.is_blocked:
                 self.logger.warning("舞蹈安全拒绝: {}".format(verdict.block_reason))
                 elapsed = (time.monotonic() - start_time) * 1000
@@ -1597,14 +1593,8 @@ class ProductionBrain:
                 candidate = sequence if sequence else ([api_code] if api_code else [])
 
                 if candidate:
-                    _batt = state_snapshot.battery_level if state_snapshot else 0.0
-                    _stand = state_snapshot.is_standing if state_snapshot else False
-                    _ts = snapshot_monotonic_ts if state_snapshot else None
-                    if not state_snapshot:
-                        self.logger.warning("状態監視なし: fail-safe安全コンパイル (battery=0.0)")
-                    verdict = self.safety_compiler.compile(
-                        candidate, _batt, _stand, snapshot_timestamp=_ts,
-                    )
+                    verdict = self._compile_safety(
+                        candidate, state_snapshot, snapshot_monotonic_ts)
                     if verdict.is_blocked:
                         self.logger.warning("LLM 路径安全拒绝: {}".format(verdict.block_reason))
                         rejected_output = BrainOutput(

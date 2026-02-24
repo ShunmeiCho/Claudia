@@ -59,6 +59,9 @@ class AuditLogger:
         # 获取当前日志文件
         self.current_log_file = self._get_current_log_file()
 
+        # 写入锁 (run_in_executor 等多线程场景下保护 JSONL 行完整性)
+        self._write_lock = threading.Lock()
+
         # 内部日志器
         self.logger = logging.getLogger("AuditLogger")
 
@@ -79,26 +82,27 @@ class AuditLogger:
             True 写入成功，False 写入失败
         """
         try:
-            # 检查日志文件是否需要轮转
-            current_file = self._get_current_log_file()
-            if current_file != self.current_log_file:
-                self.logger.info(f"日志文件轮转: {self.current_log_file} -> {current_file}")
-                self.current_log_file = current_file
+            with self._write_lock:
+                # 检查日志文件是否需要轮转
+                current_file = self._get_current_log_file()
+                if current_file != self.current_log_file:
+                    self.logger.info(f"日志文件轮转: {self.current_log_file} -> {current_file}")
+                    self.current_log_file = current_file
 
-            # 检查文件大小
-            if self.current_log_file.exists():
-                if self.current_log_file.stat().st_size > self.max_size_bytes:
-                    # 归档当前文件
-                    archive_name = self.current_log_file.with_suffix(
-                        f".{datetime.now().strftime('%H%M%S')}.jsonl"
-                    )
-                    self.current_log_file.rename(archive_name)
-                    self.logger.warning(f"日志文件过大，归档为: {archive_name}")
+                # 检查文件大小
+                if self.current_log_file.exists():
+                    if self.current_log_file.stat().st_size > self.max_size_bytes:
+                        # 归档当前文件
+                        archive_name = self.current_log_file.with_suffix(
+                            f".{datetime.now().strftime('%H%M%S')}.jsonl"
+                        )
+                        self.current_log_file.rename(archive_name)
+                        self.logger.warning(f"日志文件过大，归档为: {archive_name}")
 
-            # 追加JSONL条目
-            with self.current_log_file.open('a', encoding='utf-8') as f:
-                json_line = json.dumps(asdict(entry), ensure_ascii=False)
-                f.write(json_line + '\n')
+                # 追加JSONL条目
+                with self.current_log_file.open('a', encoding='utf-8') as f:
+                    json_line = json.dumps(asdict(entry), ensure_ascii=False)
+                    f.write(json_line + '\n')
             return True
 
         except Exception as e:

@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+import stat
 import time
 from typing import AsyncIterator, Callable, Optional, Tuple
 
@@ -197,6 +198,12 @@ async def create_uds_server(
     """
     cleanup_socket(path)
     server = await asyncio.start_unix_server(handler, path=path)
+    # ソケットファイルのパーミッションを owner-only に制限
+    # (同一マシン上の他ユーザーからの不正接続を防止)
+    try:
+        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)  # 0o600
+    except OSError as e:
+        logger.warning("ソケットパーミッション設定失敗: %s: %s", path, e)
     logger.info("UDS サーバー起動: %s", path)
     return server
 
