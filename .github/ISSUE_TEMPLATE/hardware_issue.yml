@@ -1,0 +1,131 @@
+name: Hardware Issue
+description: Report issues specific to Go2 robot, Jetson, sensors, or connectivity
+title: "[Hardware]: "
+labels: ["hardware", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This template is for hardware-specific issues: Go2 robot errors, DDS
+        connectivity, sensor problems, Jetson platform issues, etc.
+
+        For software bugs that can be reproduced in simulation mode, please use
+        the **Bug Report** template instead.
+
+  - type: dropdown
+    id: hardware-component
+    attributes:
+      label: Hardware Component
+      description: Which hardware component is affected?
+      multiple: true
+      options:
+        - Go2 Robot (general)
+        - DDS / Network Communication
+        - SportClient / Action Execution
+        - Jetson Orin NX
+        - USB Microphone / Audio
+        - LiDAR
+        - Camera
+        - LED System
+        - Battery / Power
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: error-code
+    attributes:
+      label: Error Code (if applicable)
+      description: |
+        Unitree error codes (e.g., 3103, 3104, 3203) or DDS error messages.
+      placeholder: "e.g., Error 3103"
+    validations:
+      required: false
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Issue Description
+      description: A clear and concise description of the hardware issue.
+      placeholder: Describe what happened...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Steps to reproduce the issue.
+      placeholder: |
+        1. Connect to Go2 via Ethernet
+        2. Run `python3 production_commander.py --hardware`
+        3. Send command '...'
+        4. See error...
+    validations:
+      required: true
+
+  - type: textarea
+    id: network-config
+    attributes:
+      label: Network Configuration
+      description: |
+        Please provide your network setup details.
+      placeholder: |
+        - Host IP: 192.168.123.x
+        - Robot IP: 192.168.123.161
+        - Interface: eth0
+        - RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+        - CYCLONEDDS_URI: (if custom)
+    validations:
+      required: false
+
+  - type: textarea
+    id: hardware-info
+    attributes:
+      label: Hardware Information
+      description: Provide details about your hardware setup.
+      placeholder: |
+        - Go2 model: Go2 / Go2 Air / Go2 Pro / Go2 EDU
+        - Jetson: Orin NX 16GB (JetPack 5.1.1)
+        - CUDA version: 11.4
+        - Ollama version: x.x.x
+        - unitree_sdk2_python version: (git hash or version)
+        - Microphone: AT2020USB-XP (if voice mode)
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log Output
+      description: |
+        Relevant error logs, DDS diagnostics, or `dmesg` output.
+        Check `logs/audit/` for detailed execution traces.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostic Commands Run
+      description: |
+        Output from any diagnostic commands you've tried.
+      placeholder: |
+        ```
+        $ ping 192.168.123.161
+        $ ollama ps
+        $ ros2 topic list
+        $ arecord -l
+        ```
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: |
+        Photos of setup, network diagrams, or other relevant information.
+    validations:
+      required: false
