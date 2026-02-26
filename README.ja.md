@@ -28,6 +28,13 @@
 > 音声 → ASR → ローカル LLM → ロボット実行 — 完全オンデバイス、クラウド不要。
 > 実演コマンド: 立って / 座って / 伏せて（日本語音声入力、Unitree Go2 実機）
 
+### Claudia ターミナル操作
+
+[![Terminal Demo](https://img.youtube.com/vi/gdyy1p4hkY4/sddefault.jpg)](https://youtu.be/gdyy1p4hkY4)
+
+> ランチャー → キーボードモード → 日本語テキストコマンド → ロボット実行。
+> 実演コマンド: 立って / 座って / 伏せて / 挨拶して（テキスト入力、Unitree Go2 実機）
+
 ### Go2 動作プレビュー
 
 <p align="center">

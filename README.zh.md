@@ -28,6 +28,13 @@
 > 语音 → ASR → 本地 LLM → 机器人执行 —— 完全本地推理，无需云端。
 > 演示命令：站 / 座 / 趴（日语语音输入，Unitree Go2 实机）
 
+### Claudia 终端控制
+
+[![Terminal Demo](https://img.youtube.com/vi/gdyy1p4hkY4/sddefault.jpg)](https://youtu.be/gdyy1p4hkY4)
+
+> 交互式启动器 → 键盘模式 → 日语文本命令 → 机器人执行。
+> 演示命令：站 (立って) / 座 (座って) / 趴 (伏せて) / 打招呼 (挨拶して)（文本输入，Unitree Go2 实机）
+
 ### Go2 动作预览
 
 <p align="center">
