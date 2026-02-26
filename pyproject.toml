@@ -30,11 +30,10 @@ dev = [
 
 asr = [
     # Voice pipeline: faster-whisper ASR engine + silero-vad via onnxruntime
-    # IMPORTANT on Jetson Orin NX: onnxruntime must be pinned to 1.18.1
-    #   (>=1.19 crashes with SIGABRT in CPU topology detection on offline cores)
-    #   Install manually: pip3 install faster-whisper onnxruntime==1.18.1
+    # onnxruntime >= 1.19 crashes on Jetson Orin NX (SIGABRT in CPU topology
+    # detection — 8 CPUs but only 0-3 online, ORT tries affinity to offline CPUs)
     "faster-whisper>=0.10.0",
-    "onnxruntime>=1.16.0",
+    "onnxruntime>=1.16.0,<1.19",
 ]
 
 tensorrt = [
