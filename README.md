@@ -1,4 +1,8 @@
-[English](README.md) | [日本語](README.ja.md) | [中文](README.zh.md)
+<p align="center">
+  <strong>English</strong> ·
+  <a href="README.ja.md">日本語</a> ·
+  <a href="README.zh.md">中文</a>
+</p>
 
 <p align="center">
   <img src="docs/images/cover.jpg" alt="Claudia — Unitree Go2 with LLM Brain" width="800">
@@ -11,6 +15,8 @@
 [![Python 3.8+](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Jetson%20Orin%20NX-green.svg)](https://developer.nvidia.com/embedded/jetson-orin)
 [![Robot](https://img.shields.io/badge/Robot-Unitree%20Go2-orange.svg)](https://www.unitree.com/)
+[![LLM](https://img.shields.io/badge/LLM-Qwen2.5--7B-purple.svg)](https://huggingface.co/Qwen/Qwen2.5-7B)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **Claudia** is an LLM-brained AI system for the **Unitree Go2** quadruped robot. It translates natural language commands in Japanese, Chinese, and English into robot actions through local LLM inference (Qwen2.5-7B on Ollama), running entirely on-device on NVIDIA Jetson Orin NX.
@@ -18,6 +24,25 @@
 > *"The LLM is the robot's brain"* — semantic understanding, not keyword matching.
 
 ---
+
+<details>
+<summary><strong>Table of Contents</strong></summary>
+
+- [Demo](#demo)
+- [Key Features](#key-features)
+- [Quick Start](#quick-start)
+- [Usage Examples](#usage-examples)
+- [Supported Actions](#supported-actions)
+- [Architecture](#architecture)
+- [Speech Recognition (ASR)](#speech-recognition-asr)
+- [Tech Stack](#tech-stack)
+- [Development](#development)
+- [Troubleshooting](#troubleshooting)
+- [Roadmap](#roadmap)
+- [Acknowledgments](#acknowledgments)
+- [License](#license)
+
+</details>
 
 ## Demo
 
@@ -42,8 +67,9 @@
 > High-risk mode toggle (c) → Stretch / Front Jump / Front Flip — demonstrating SafetyCompiler gate control.
 > Terminal mode shown here — voice and terminal share the same LLM pipeline, only the input method differs.
 
-### Go2 in Action
-
+<details>
+<summary><strong>Go2 in Action</strong> — official Unitree footage (click to expand)</summary>
+<br>
 <p align="center">
   <a href="https://youtu.be/8gaULsglOQE"><img src="docs/images/go2-dance.gif" alt="Dance" width="260"></a>
   <a href="https://youtu.be/DXRojz4N8K8"><img src="docs/images/go2-flip.gif" alt="Flip" width="260"></a>
@@ -53,9 +79,6 @@
   <a href="https://youtu.be/F1JtFksc_k0"><img src="docs/images/go2-avoid.gif" alt="Obstacle Avoidance" width="260"></a>
   <a href="https://youtu.be/rjVfRanqUC4"><img src="docs/images/go2-lidar.gif" alt="4D LiDAR" width="260"></a>
 </p>
-
-<details>
-<summary>All Go2 videos (click to expand)</summary>
 
 | Video | Link |
 |-------|------|
@@ -69,7 +92,6 @@
 | Mobile App Control | [YouTube](https://youtu.be/IM2MKeuHtu4) |
 
 <sub>All footage from <a href="https://www.unitree.com/go2">Unitree Robotics official website</a>. Used for educational/research demonstration purposes.</sub>
-
 </details>
 
 ---
@@ -123,6 +145,12 @@
 git clone https://github.com/ShunmeiCho/Claudia.git
 cd claudia
 pip install -e .
+
+# Install Ollama (if not already installed)
+curl -fsSL https://ollama.ai/install.sh | sh
+
+# Create the Claudia brain model
+ollama create claudia-7b:v2.0 -f models/ClaudiaIntelligent_7B_v2.0
 
 # Set up environment
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
@@ -278,31 +306,30 @@ Claudia runs on a **Unitree Go2** quadruped robot with an external **NVIDIA Jets
 
 ### Command Processing Pipeline
 
-```
-User Input (JA/ZH/EN)
-  |
-  v
-1. Emergency Bypass ........... hardcoded stop commands, ~0ms
-  |
-  v
-2. Hot Cache .................. 80+ cached command→API mappings, ~1ms
-  |                            (cultural terms, kana aliases, suffix stripping)
-  v
-3. Conversational Detection ... greetings/questions → text-only response
-  |
-  v
-4. LLM Inference (BRAIN_ROUTER_MODE controls routing):
-  |  - dual (default): Action model (~30 tokens, 3-5s on Jetson)
-  |  - legacy: 7B model (full response + action code)
-  |  - shadow: both channels, A/B comparison logging
-  v
-SafetyCompiler.compile() ...... whitelist → battery gate → standing prereq
-  |
-  v
-Execute ....................... SportClient RPC via CycloneDDS/DDS
+```mermaid
+flowchart TD
+    Input["User Input (JA / ZH / EN)"] --> Emergency{"1. Emergency Bypass<br/>~0ms"}
+    Emergency -->|match| Stop["Immediate Stop"]
+    Emergency -->|miss| Cache{"2. Hot Cache<br/>80+ mappings, ~1ms"}
+    Cache -->|hit| Execute
+    Cache -->|miss| Conv{"3. Conversational<br/>Detection"}
+    Conv -->|"greeting / question"| TextOnly["Text Response<br/>(no action)"]
+    Conv -->|command| LLM["4. LLM Inference<br/>(3-5s on Jetson)"]
+    LLM --> Safety["SafetyCompiler.compile()<br/>whitelist / battery / standing"]
+    Safety --> Execute["Execute Action"]
+    Execute --> Robot["SportClient RPC<br/>via CycloneDDS"]
+
+    style Input fill:#e1f5fe,stroke:#0288d1
+    style Stop fill:#ffcdd2,stroke:#c62828
+    style TextOnly fill:#f3e5f5,stroke:#7b1fa2
+    style Execute fill:#c8e6c9,stroke:#2e7d32
+    style Robot fill:#c8e6c9,stroke:#2e7d32
 ```
 
-### Module Overview
+> **Routing modes** (`BRAIN_ROUTER_MODE`): `dual` (default, action-only model, ~30 tokens) | `legacy` (7B full response) | `shadow` (A/B comparison logging)
+
+<details>
+<summary><strong>Module Overview</strong> (click to expand)</summary>
 
 | Module | Responsibility |
 |--------|---------------|
@@ -311,17 +338,14 @@ Execute ....................... SportClient RPC via CycloneDDS/DDS
 | `brain/action_registry.py` | Single source of truth for all action definitions |
 | `brain/safety_compiler.py` | Unified safety pipeline (battery, standing, whitelist) |
 | `brain/audit_logger.py` | Structured audit trail (`logs/audit/`) |
-| `brain/audit_routes.py` | Canonical route names for audit logging |
-| `brain/sdk_state_provider.py` | Direct SDK state queries (alternative to ROS2 monitor) |
 | `brain/mock_sport_client.py` | Simulates SportClient for testing |
 | `robot_controller/system_state_monitor.py` | ROS2-based battery/posture monitoring at 5Hz |
 | `robot_controller/unified_led_controller.py` | LED mode API (thinking/success/error/listening) |
 | `production_commander.py` | Keyboard REPL entry point |
-| `voice_commander.py` | Voice mode entry point: ASR subprocess + AudioCapture + ASRBridge |
-| `audio/audio_capture.py` | USB mic capture: arecord subprocess → resample → UDS |
-| `audio/asr_bridge.py` | ASR result consumer: dedup/filter → Queue → Brain |
-| `audio/wake_word.py` | Wake word matcher + gate: exact prefix matching + listening window |
+| `voice_commander.py` | Voice mode entry point: ASR + AudioCapture + ASRBridge |
 | `audio/asr_service/` | ASR server: faster-whisper + silero-vad + UDS |
+
+</details>
 
 ---
 
@@ -372,36 +396,9 @@ ASRBridge ←── /tmp/claudia_asr_result.sock ←─── JSON Lines
 
 ## Text-to-Speech (TTS)
 
-> Status: **Echo Gating Implemented** — TTS echo gating (tts_start/tts_end via ctrl socket) is implemented in asr_server.py; TTS provider integration pending.
+> Status: **Echo Gating Implemented** — TTS echo gating implemented in ASR server. TTS provider integration planned for PR3 (VOICEVOX / Google TTS).
 
-### Current State
-
-Responses are currently displayed as text in the REPL. The robot responds in Japanese (enforced by `_sanitize_response()` which validates hiragana/katakana/kanji presence). The ASR server implements echo gating to mute recognition during TTS playback.
-
-### Planned Architecture (PR3)
-
-```
-ProductionBrain
-  |
-  v
-BrainOutput.response (Japanese text)
-  |
-  v
-Commander._speak_nonblocking()
-  |  - TTSProvider (pluggable)
-  |    - VOICEVOX (Japanese, high quality)
-  |    - Google TTS
-  |    - gTTS (lightweight)
-  |  - ThreadPoolExecutor (non-blocking)
-  |  - generation_id cancellation
-  v
-Audio Output (speaker)
-```
-
-**Key design principle**: The brain **never** touches TTS. `ProductionBrain` produces `BrainOutput` (text + action code); TTS playback is managed entirely in the commander layer. This ensures:
-- Brain tests don't need TTS mocks
-- TTS failures never block action execution
-- New commands automatically cancel in-progress speech
+Responses are currently displayed as text in the REPL. The robot responds in Japanese (enforced by `_sanitize_response()`). The brain **never** touches TTS — `ProductionBrain` produces text + action code; TTS playback will be managed entirely in the commander layer.
 
 ---
 
@@ -472,12 +469,25 @@ curl http://localhost:11434/api/tags         # Ollama health check
 ## Roadmap
 
 | Phase | Description | Status |
-|-------|-------------|--------|
+|:---:|-------------|:---:|
 | PR1 | SafetyCompiler + action_registry + P0 safety fixes | Done |
 | PR2 | Dual-channel LLM routing (action + voice separation) | Done |
-| PR3 | ASR/TTS integration | Phase 2 Done (ASR), TTS Pending |
-| P2 | Parameterized actions (Move, Euler, SpeedLevel) | Future |
-| P2 | 3B action-channel A/B testing | Future |
+| PR3 | ASR/TTS integration | ASR Done, TTS Pending |
+| P2 | Parameterized actions (Move, Euler, SpeedLevel) | Planned |
+| P2 | 3B action-channel A/B testing | Planned |
+
+---
+
+## Acknowledgments
+
+Claudia is built on the shoulders of these open-source projects:
+
+- [Qwen2.5](https://github.com/QwenLM/Qwen2.5) — multilingual LLM powering the robot brain
+- [Ollama](https://ollama.ai/) — local LLM inference runtime
+- [Unitree SDK2](https://github.com/unitreerobotics) — Go2 robot control SDK
+- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — CTranslate2-based ASR engine
+- [silero-vad](https://github.com/snakers4/silero-vad) — voice activity detection
+- [ROS 2 Foxy](https://docs.ros.org/en/foxy/) + [CycloneDDS](https://cyclonedds.io/) — robot middleware
 
 ---
 

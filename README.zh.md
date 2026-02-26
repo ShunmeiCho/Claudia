@@ -1,4 +1,8 @@
-[English](README.md) | [日本語](README.ja.md) | [中文](README.zh.md)
+<p align="center">
+  <a href="README.md">English</a> ·
+  <a href="README.ja.md">日本語</a> ·
+  <strong>中文</strong>
+</p>
 
 <p align="center">
   <img src="docs/images/cover.jpg" alt="Claudia — Unitree Go2 LLM 大脑机器人" width="800">
@@ -11,6 +15,8 @@
 [![Python 3.8+](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Jetson%20Orin%20NX-green.svg)](https://developer.nvidia.com/embedded/jetson-orin)
 [![Robot](https://img.shields.io/badge/Robot-Unitree%20Go2-orange.svg)](https://www.unitree.com/)
+[![LLM](https://img.shields.io/badge/LLM-Qwen2.5--7B-purple.svg)](https://huggingface.co/Qwen/Qwen2.5-7B)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **Claudia** 是面向 **Unitree Go2** 四足机器人的 LLM 大脑 AI 系统。它通过本地 LLM 推理（Ollama 上的 Qwen2.5-7B），将日语、中文和英语的自然语言命令转化为机器人动作。完全在 NVIDIA Jetson Orin NX 上本地运行。
@@ -18,6 +24,25 @@
 > *"LLM 就是机器人的大脑"* —— 语义理解，而非关键词匹配。
 
 ---
+
+<details>
+<summary><strong>目录</strong></summary>
+
+- [演示](#演示)
+- [核心特性](#核心特性)
+- [快速开始](#快速开始)
+- [使用示例](#使用示例)
+- [支持的动作](#支持的动作)
+- [架构](#架构)
+- [语音识别 (ASR)](#语音识别-asr)
+- [技术栈](#技术栈)
+- [开发](#开发)
+- [故障排除](#故障排除)
+- [路线图](#路线图)
+- [致谢](#致谢)
+- [许可证](#许可证)
+
+</details>
 
 ## 演示
 
@@ -42,8 +67,9 @@
 > 高危模式切换 (c) → 拉伸 / 前跳 / 前空翻 — 演示 SafetyCompiler 门控机制。
 > 此处使用终端模式演示 — 语音与终端共享同一 LLM 管线，仅输入方式不同。
 
-### Go2 动作预览
-
+<details>
+<summary><strong>Go2 动作预览</strong> —— Unitree 官方素材（点击展开）</summary>
+<br>
 <p align="center">
   <a href="https://youtu.be/8gaULsglOQE"><img src="docs/images/go2-dance.gif" alt="舞蹈" width="260"></a>
   <a href="https://youtu.be/DXRojz4N8K8"><img src="docs/images/go2-flip.gif" alt="空翻" width="260"></a>
@@ -53,9 +79,6 @@
   <a href="https://youtu.be/F1JtFksc_k0"><img src="docs/images/go2-avoid.gif" alt="障碍回避" width="260"></a>
   <a href="https://youtu.be/rjVfRanqUC4"><img src="docs/images/go2-lidar.gif" alt="4D LiDAR" width="260"></a>
 </p>
-
-<details>
-<summary>Go2 全部视频（点击展开）</summary>
 
 | 视频 | 链接 |
 |------|------|
@@ -69,7 +92,6 @@
 | 手机 APP 控制 | [YouTube](https://youtu.be/IM2MKeuHtu4) |
 
 <sub>全部影像来自 <a href="https://www.unitree.com/go2">Unitree Robotics 官网</a>，仅用于教育/研究演示目的。</sub>
-
 </details>
 
 ---
@@ -123,6 +145,12 @@
 git clone https://github.com/ShunmeiCho/Claudia.git
 cd claudia
 pip install -e .
+
+# 安装 Ollama（如尚未安装）
+curl -fsSL https://ollama.ai/install.sh | sh
+
+# 创建 Claudia 大脑模型
+ollama create claudia-7b:v2.0 -f models/ClaudiaIntelligent_7B_v2.0
 
 # 环境配置
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
@@ -278,31 +306,30 @@ Claudia 运行在 **Unitree Go2** 四足机器人上，外接 **NVIDIA Jetson Or
 
 ### 命令处理管线
 
-```
-用户输入（日/中/英）
-  |
-  v
-1. 紧急绕过 ................. 硬编码停止命令，~0ms
-  |
-  v
-2. 热缓存 .................. 80+ 条缓存命令→API 映射，~1ms
-  |                          （文化表达、假名别名、后缀剥离）
-  v
-3. 对话检测 ................. 问候/提问 → 纯文本回复
-  |
-  v
-4. LLM 推理（BRAIN_ROUTER_MODE 控制路由）：
-  |  - dual（默认）：Action 模型（~30 tokens，Jetson 上 3-5 秒）
-  |  - legacy：7B 模型（完整回复 + 动作码）
-  |  - shadow：双通道，A/B 对比日志
-  v
-SafetyCompiler.compile() ..... 白名单→电量门控→站立前置
-  |
-  v
-执行 ......................... SportClient RPC via CycloneDDS/DDS
+```mermaid
+flowchart TD
+    Input["用户输入 (JA / ZH / EN)"] --> Emergency{"1. 紧急绕过<br/>~0ms"}
+    Emergency -->|match| Stop["立即停止"]
+    Emergency -->|miss| Cache{"2. 热缓存<br/>80+ 条, ~1ms"}
+    Cache -->|hit| Execute
+    Cache -->|miss| Conv{"3. 对话检测"}
+    Conv -->|"问候 / 提问"| TextOnly["文本回复<br/>(无动作)"]
+    Conv -->|command| LLM["4. LLM 推理<br/>(Jetson 上 3-5 秒)"]
+    LLM --> Safety["SafetyCompiler.compile()<br/>白名单 / 电量 / 站立"]
+    Safety --> Execute["执行动作"]
+    Execute --> Robot["SportClient RPC<br/>via CycloneDDS"]
+
+    style Input fill:#e1f5fe,stroke:#0288d1
+    style Stop fill:#ffcdd2,stroke:#c62828
+    style TextOnly fill:#f3e5f5,stroke:#7b1fa2
+    style Execute fill:#c8e6c9,stroke:#2e7d32
+    style Robot fill:#c8e6c9,stroke:#2e7d32
 ```
 
-### 模块概览
+> **路由模式** (`BRAIN_ROUTER_MODE`): `dual`（默认，Action 专用模型，~30 tokens）| `legacy`（7B 完整响应）| `shadow`（A/B 对比日志）
+
+<details>
+<summary><strong>模块概览</strong>（点击展开）</summary>
 
 | 模块 | 职责 |
 |--------|------|
@@ -311,17 +338,14 @@ SafetyCompiler.compile() ..... 白名单→电量门控→站立前置
 | `brain/action_registry.py` | 所有动作定义的单一真源 |
 | `brain/safety_compiler.py` | 统一安全管线（电量、站立、白名单） |
 | `brain/audit_logger.py` | 结构化审计日志 (`logs/audit/`) |
-| `brain/audit_routes.py` | 审计日志规范路由名 |
-| `brain/sdk_state_provider.py` | 直接 SDK 状态查询（ROS2 监控器的替代方案） |
 | `brain/mock_sport_client.py` | 测试用 SportClient 模拟器 |
 | `robot_controller/system_state_monitor.py` | 基于 ROS2 的电量/姿态监控（5Hz） |
 | `robot_controller/unified_led_controller.py` | LED 模式 API（思考中/成功/错误/监听） |
 | `production_commander.py` | 键盘 REPL 入口 |
-| `voice_commander.py` | 语音模式入口：ASR 子进程 + AudioCapture + ASRBridge |
-| `audio/audio_capture.py` | USB 麦克风采集：arecord 子进程 → 重采样 → UDS |
-| `audio/asr_bridge.py` | ASR 结果消费者：去重/过滤 → Queue → Brain |
-| `audio/wake_word.py` | 唤醒词匹配器 + 门控：精确前缀匹配 + 监听窗口 |
+| `voice_commander.py` | 语音模式入口：ASR + AudioCapture + ASRBridge |
 | `audio/asr_service/` | ASR 服务器：faster-whisper + silero-vad + UDS |
+
+</details>
 
 ---
 
@@ -372,36 +396,9 @@ ASRBridge ←── /tmp/claudia_asr_result.sock ←─── JSON Lines
 
 ## 文本转语音 (TTS)
 
-> 状态：**回声门控已实现** —— ASR 服务器中已实现 TTS 回声门控（通过 ctrl socket 的 tts_start/tts_end）；TTS Provider 集成待完成。
+> 状态：**回声门控已实现** —— ASR 服务器已实现回声门控。TTS Provider 集成计划在 PR3 完成（VOICEVOX / Google TTS）。
 
-### 当前状态
-
-回复目前在 REPL 中以文本形式显示。机器人用日语回复（由 `_sanitize_response()` 验证平假名/片假名/汉字的存在来确保）。ASR 服务器实现了回声门控，在 TTS 播放期间静音识别。
-
-### 规划架构 (PR3)
-
-```
-ProductionBrain
-  |
-  v
-BrainOutput.response（日语文本）
-  |
-  v
-Commander._speak_nonblocking()
-  |  - TTS Provider（可插拔）
-  |    - VOICEVOX（日语，高品质）
-  |    - Google TTS
-  |    - gTTS（轻量级）
-  |  - ThreadPoolExecutor（非阻塞）
-  |  - generation_id 取消机制
-  v
-音频输出（扬声器）
-```
-
-**核心设计原则**：大脑**绝不**触碰 TTS。`ProductionBrain` 仅产出 `BrainOutput`（文本 + 动作码），TTS 播放完全由命令器层管理。这确保了：
-- 大脑的测试无需 TTS mock
-- TTS 故障不会阻塞动作执行
-- 新命令自动取消正在播放的语音
+回复目前在 REPL 中以文本形式显示。机器人用日语回复（由 `_sanitize_response()` 验证）。大脑**绝不**触碰 TTS —— `ProductionBrain` 仅产出文本 + 动作码，TTS 播放完全由命令器层管理。
 
 ---
 
@@ -467,9 +464,22 @@ mypy src/
 |:---:|---|:---:|
 | PR1 | SafetyCompiler + action_registry + P0 安全修复 | 完成 |
 | PR2 | 双通道 LLM 路由（动作+语音分离） | 完成 |
-| PR3 | ASR/TTS 集成 | Phase 2 完成（ASR），TTS 待实现 |
-| P2 | 参数化动作（Move, Euler, SpeedLevel） | 未来 |
-| P2 | 3B 动作通道 A/B 测试 | 未来 |
+| PR3 | ASR/TTS 集成 | ASR 完成，TTS 待实现 |
+| P2 | 参数化动作（Move, Euler, SpeedLevel） | 计划中 |
+| P2 | 3B 动作通道 A/B 测试 | 计划中 |
+
+---
+
+## 致谢
+
+Claudia 基于以下开源项目构建：
+
+- [Qwen2.5](https://github.com/QwenLM/Qwen2.5) — 驱动机器人大脑的多语言 LLM
+- [Ollama](https://ollama.ai/) — 本地 LLM 推理运行时
+- [Unitree SDK2](https://github.com/unitreerobotics) — Go2 机器人控制 SDK
+- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — 基于 CTranslate2 的 ASR 引擎
+- [silero-vad](https://github.com/snakers4/silero-vad) — 语音活动检测
+- [ROS 2 Foxy](https://docs.ros.org/en/foxy/) + [CycloneDDS](https://cyclonedds.io/) — 机器人中间件
 
 ---
 

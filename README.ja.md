@@ -1,4 +1,8 @@
-[English](README.md) | [日本語](README.ja.md) | [中文](README.zh.md)
+<p align="center">
+  <a href="README.md">English</a> ·
+  <strong>日本語</strong> ·
+  <a href="README.zh.md">中文</a>
+</p>
 
 <p align="center">
   <img src="docs/images/cover.jpg" alt="Claudia — Unitree Go2 LLM頭脳ロボット" width="800">
@@ -11,6 +15,8 @@
 [![Python 3.8+](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Jetson%20Orin%20NX-green.svg)](https://developer.nvidia.com/embedded/jetson-orin)
 [![Robot](https://img.shields.io/badge/Robot-Unitree%20Go2-orange.svg)](https://www.unitree.com/)
+[![LLM](https://img.shields.io/badge/LLM-Qwen2.5--7B-purple.svg)](https://huggingface.co/Qwen/Qwen2.5-7B)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **Claudia**は、**Unitree Go2**四足歩行ロボット向けのLLM頭脳AIシステムです。日本語・中国語・英語の自然言語コマンドを、ローカルLLM推論（Ollama上のQwen2.5-7B）によってロボット動作に変換します。NVIDIA Jetson Orin NX上で完全にオンデバイスで動作します。
@@ -18,6 +24,25 @@
 > *「LLMがロボットの頭脳」* — キーワードマッチングではなく、意味理解。
 
 ---
+
+<details>
+<summary><strong>目次</strong></summary>
+
+- [デモ](#デモ)
+- [主な特徴](#主な特徴)
+- [クイックスタート](#クイックスタート)
+- [使用例](#使用例)
+- [対応動作](#対応動作)
+- [アーキテクチャ](#アーキテクチャ)
+- [音声認識 (ASR)](#音声認識-asr)
+- [技術スタック](#技術スタック)
+- [開発](#開発)
+- [トラブルシューティング](#トラブルシューティング)
+- [ロードマップ](#ロードマップ)
+- [謝辞](#謝辞)
+- [ライセンス](#ライセンス)
+
+</details>
 
 ## デモ
 
@@ -42,8 +67,9 @@
 > 高リスクモード切替 (c) → ストレッチ / 前ジャンプ / 前宙 — SafetyCompiler ゲート制御のデモ。
 > ターミナルモードで実演 — 音声とターミナルは同一の LLM パイプラインを共有し、入力方法のみが異なります。
 
-### Go2 動作プレビュー
-
+<details>
+<summary><strong>Go2 動作プレビュー</strong> — Unitree公式映像（クリックで展開）</summary>
+<br>
 <p align="center">
   <a href="https://youtu.be/8gaULsglOQE"><img src="docs/images/go2-dance.gif" alt="ダンス" width="260"></a>
   <a href="https://youtu.be/DXRojz4N8K8"><img src="docs/images/go2-flip.gif" alt="バク転" width="260"></a>
@@ -53,9 +79,6 @@
   <a href="https://youtu.be/F1JtFksc_k0"><img src="docs/images/go2-avoid.gif" alt="障害物回避" width="260"></a>
   <a href="https://youtu.be/rjVfRanqUC4"><img src="docs/images/go2-lidar.gif" alt="4D LiDAR" width="260"></a>
 </p>
-
-<details>
-<summary>Go2 全動画一覧（クリックで展開）</summary>
 
 | 動画 | リンク |
 |------|--------|
@@ -69,7 +92,6 @@
 | モバイルアプリ操作 | [YouTube](https://youtu.be/IM2MKeuHtu4) |
 
 <sub>全映像は <a href="https://www.unitree.com/go2">Unitree Robotics 公式サイト</a>より。教育・研究デモ目的で使用。</sub>
-
 </details>
 
 ---
@@ -123,6 +145,12 @@
 git clone https://github.com/ShunmeiCho/Claudia.git
 cd claudia
 pip install -e .
+
+# Ollamaのインストール（未導入の場合）
+curl -fsSL https://ollama.ai/install.sh | sh
+
+# Claudia頭脳モデルの作成
+ollama create claudia-7b:v2.0 -f models/ClaudiaIntelligent_7B_v2.0
 
 # 環境設定
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
@@ -278,31 +306,30 @@ Claudia は **Unitree Go2** 四足歩行ロボット上で、外付け **NVIDIA 
 
 ### コマンド処理パイプライン
 
-```
-ユーザー入力（日/中/英）
-  |
-  v
-1. 緊急バイパス .............. ハードコードされた停止コマンド、~0ms
-  |
-  v
-2. ホットキャッシュ .......... 80+件のキャッシュ済みコマンド→APIマッピング、~1ms
-  |                           （文化的表現、カナエイリアス、サフィックス除去）
-  v
-3. 会話検出 .................. 挨拶/質問 → テキストのみの応答
-  |
-  v
-4. LLM推論（BRAIN_ROUTER_MODEでルーティング制御）:
-  |  - dual（デフォルト）: Actionモデル（~30トークン、Jetsonで3-5秒）
-  |  - legacy: 7Bモデル（フル応答＋アクションコード）
-  |  - shadow: 両チャネル、A/B比較ログ
-  v
-SafetyCompiler.compile() ...... ホワイトリスト→バッテリーゲート→起立前提
-  |
-  v
-実行 ......................... SportClient RPC via CycloneDDS/DDS
+```mermaid
+flowchart TD
+    Input["ユーザー入力 (JA / ZH / EN)"] --> Emergency{"1. 緊急バイパス<br/>~0ms"}
+    Emergency -->|match| Stop["即座に停止"]
+    Emergency -->|miss| Cache{"2. ホットキャッシュ<br/>80+件, ~1ms"}
+    Cache -->|hit| Execute
+    Cache -->|miss| Conv{"3. 会話検出"}
+    Conv -->|"挨拶 / 質問"| TextOnly["テキスト応答<br/>(動作なし)"]
+    Conv -->|command| LLM["4. LLM推論<br/>(Jetsonで3-5秒)"]
+    LLM --> Safety["SafetyCompiler.compile()<br/>ホワイトリスト / バッテリー / 起立"]
+    Safety --> Execute["動作実行"]
+    Execute --> Robot["SportClient RPC<br/>via CycloneDDS"]
+
+    style Input fill:#e1f5fe,stroke:#0288d1
+    style Stop fill:#ffcdd2,stroke:#c62828
+    style TextOnly fill:#f3e5f5,stroke:#7b1fa2
+    style Execute fill:#c8e6c9,stroke:#2e7d32
+    style Robot fill:#c8e6c9,stroke:#2e7d32
 ```
 
-### モジュール概要
+> **ルーティングモード** (`BRAIN_ROUTER_MODE`): `dual`（デフォルト、アクション専用モデル、~30トークン）| `legacy`（7Bフル応答）| `shadow`（A/B比較ログ）
+
+<details>
+<summary><strong>モジュール概要</strong>（クリックで展開）</summary>
 
 | モジュール | 責務 |
 |--------|------|
@@ -311,17 +338,14 @@ SafetyCompiler.compile() ...... ホワイトリスト→バッテリーゲート
 | `brain/action_registry.py` | 全動作定義の唯一の真実源 |
 | `brain/safety_compiler.py` | 統一安全パイプライン（バッテリー、起立、ホワイトリスト） |
 | `brain/audit_logger.py` | 構造化監査ログ (`logs/audit/`) |
-| `brain/audit_routes.py` | 監査ログ用の正規ルート名 |
-| `brain/sdk_state_provider.py` | 直接SDK状態クエリ（ROS2モニターの代替） |
 | `brain/mock_sport_client.py` | テスト用SportClientシミュレーター |
 | `robot_controller/system_state_monitor.py` | ROS2ベースのバッテリー/姿勢監視（5Hz） |
 | `robot_controller/unified_led_controller.py` | LEDモードAPI（思考中/成功/エラー/リスニング） |
 | `production_commander.py` | キーボードREPLエントリーポイント |
-| `voice_commander.py` | 音声モードエントリーポイント: ASRサブプロセス + AudioCapture + ASRBridge |
-| `audio/audio_capture.py` | USBマイク取得: arecordサブプロセス → リサンプル → UDS |
-| `audio/asr_bridge.py` | ASR結果コンシューマー: 重複排除/フィルター → Queue → Brain |
-| `audio/wake_word.py` | 唤醒詞マッチャー + ゲート: 既知プレフィクス完全一致 + 監聴ウィンドウ |
+| `voice_commander.py` | 音声モードエントリーポイント: ASR + AudioCapture + ASRBridge |
 | `audio/asr_service/` | ASRサーバー: faster-whisper + silero-vad + UDS |
+
+</details>
 
 ---
 
@@ -372,36 +396,9 @@ ASRBridge ←── /tmp/claudia_asr_result.sock ←─── JSON Lines
 
 ## テキスト読み上げ (TTS)
 
-> ステータス: **エコーゲーティング実装済み** — ASRサーバーにTTSエコーゲーティング（ctrlソケット経由のtts_start/tts_end）を実装済み。TTSプロバイダー統合は未実装。
+> ステータス: **エコーゲーティング実装済み** — ASRサーバーにエコーゲーティングを実装済み。TTSプロバイダー統合はPR3で予定（VOICEVOX / Google TTS）。
 
-### 現在の状態
-
-応答は現在REPLにテキストとして表示されます。ロボットは日本語で応答します（`_sanitize_response()`がひらがな/カタカナ/漢字の存在を検証）。ASRサーバーはTTS再生中の認識をミュートするエコーゲーティングを実装しています。
-
-### 計画アーキテクチャ (PR3)
-
-```
-ProductionBrain
-  |
-  v
-BrainOutput.response（日本語テキスト）
-  |
-  v
-Commander._speak_nonblocking()
-  |  - TTSプロバイダー（プラグイン可能）
-  |    - VOICEVOX（日本語、高品質）
-  |    - Google TTS
-  |    - gTTS（軽量）
-  |  - ThreadPoolExecutor（ノンブロッキング）
-  |  - generation_idキャンセル機構
-  v
-音声出力（スピーカー）
-```
-
-**重要な設計原則**: 頭脳はTTSに**一切関与しない**。`ProductionBrain`は`BrainOutput`（テキスト＋アクションコード）を生成するのみ。TTS再生はコマンダー層が完全に管理。これにより：
-- 頭脳のテストにTTSモックが不要
-- TTS障害が動作実行をブロックしない
-- 新しいコマンドが再生中の音声を自動キャンセル
+応答は現在REPLにテキストとして表示されます。ロボットは日本語で応答（`_sanitize_response()`による検証）。頭脳はTTSに**一切関与しない** — `ProductionBrain`はテキスト＋アクションコードを生成するのみで、TTS再生はコマンダー層が管理。
 
 ---
 
@@ -467,9 +464,22 @@ mypy src/
 |:---:|---|:---:|
 | PR1 | SafetyCompiler + action_registry + P0安全修正 | 完了 |
 | PR2 | デュアルチャネルLLMルーティング（アクション+音声分離） | 完了 |
-| PR3 | ASR/TTS統合 | Phase 2完了（ASR）、TTS未実装 |
-| P2 | パラメーター化動作（Move, Euler, SpeedLevel） | 将来 |
-| P2 | 3Bアクションチャネル A/Bテスト | 将来 |
+| PR3 | ASR/TTS統合 | ASR完了、TTS未実装 |
+| P2 | パラメーター化動作（Move, Euler, SpeedLevel） | 計画中 |
+| P2 | 3Bアクションチャネル A/Bテスト | 計画中 |
+
+---
+
+## 謝辞
+
+Claudiaは以下のオープンソースプロジェクトの上に構築されています：
+
+- [Qwen2.5](https://github.com/QwenLM/Qwen2.5) — ロボット頭脳を動かす多言語LLM
+- [Ollama](https://ollama.ai/) — ローカルLLM推論ランタイム
+- [Unitree SDK2](https://github.com/unitreerobotics) — Go2ロボット制御SDK
+- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — CTranslate2ベースのASRエンジン
+- [silero-vad](https://github.com/snakers4/silero-vad) — 音声活動検出
+- [ROS 2 Foxy](https://docs.ros.org/en/foxy/) + [CycloneDDS](https://cyclonedds.io/) — ロボットミドルウェア
 
 ---
 
