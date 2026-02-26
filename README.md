@@ -40,7 +40,7 @@
 [![Advanced Actions Demo](https://img.youtube.com/vi/-Sj_ffcLJzA/sddefault.jpg)](https://youtu.be/-Sj_ffcLJzA)
 
 > High-risk mode toggle (c) → Stretch / Front Jump / Front Flip — demonstrating SafetyCompiler gate control.
-> Commands shown: Enable high-risk mode → Stretch (ストレッチ) / Front Jump (前ジャンプ) / Front Flip (前宙)
+> Terminal mode shown here — voice and terminal share the same LLM pipeline, only the input method differs.
 
 ### Go2 in Action
 

@@ -40,7 +40,7 @@
 [![Advanced Actions Demo](https://img.youtube.com/vi/-Sj_ffcLJzA/sddefault.jpg)](https://youtu.be/-Sj_ffcLJzA)
 
 > 高危模式切换 (c) → 拉伸 / 前跳 / 前空翻 — 演示 SafetyCompiler 门控机制。
-> 演示命令：启用高危模式 → 拉伸 / 前跳 / 前空翻（文本输入，Unitree Go2 实机）
+> 此处使用终端模式演示 — 语音与终端共享同一 LLM 管线，仅输入方式不同。
 
 ### Go2 动作预览
 

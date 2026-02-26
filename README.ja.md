@@ -40,7 +40,7 @@
 [![Advanced Actions Demo](https://img.youtube.com/vi/-Sj_ffcLJzA/sddefault.jpg)](https://youtu.be/-Sj_ffcLJzA)
 
 > 高リスクモード切替 (c) → ストレッチ / 前ジャンプ / 前宙 — SafetyCompiler ゲート制御のデモ。
-> 実演コマンド: 高リスクモード有効化 → ストレッチ / 前ジャンプ / 前宙（テキスト入力、Unitree Go2 実機）
+> ターミナルモードで実演 — 音声とターミナルは同一の LLM パイプラインを共有し、入力方法のみが異なります。
 
 ### Go2 動作プレビュー
 
