@@ -69,10 +69,9 @@
 
 ### Claudia 完全ワイヤレスデモ
 
-<!-- TODO: YouTube動画アップロード後、VIDEO_IDを実際のIDに置き換え -->
-<!-- [![Fully Wireless Demo](https://img.youtube.com/vi/VIDEO_ID/sddefault.jpg)](https://youtu.be/VIDEO_ID) -->
+[![Fully Wireless Demo](https://img.youtube.com/vi/Pi2ocDLCMOk/sddefault.jpg)](https://youtu.be/Pi2ocDLCMOk)
 
-> 近日公開 — 完全ワイヤレス構成（Wi-Fi + ワイヤレスマイク）による音声パイプラインのフルデモ。有線接続ゼロ。
+> 完全ワイヤレス音声パイプライン：DJI MIC 2 → ASR → ローカル LLM → ロボット実行 — 有線接続ゼロ（Wi-Fi + ワイヤレスマイク）。
 
 <details>
 <summary><strong>Go2 動作プレビュー</strong> — Unitree公式映像（クリックで展開）</summary>

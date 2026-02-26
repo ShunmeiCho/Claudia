@@ -69,10 +69,9 @@
 
 ### Claudia 完全无线演示
 
-<!-- TODO: 上传 YouTube 视频后，将 VIDEO_ID 替换为实际视频 ID -->
-<!-- [![Fully Wireless Demo](https://img.youtube.com/vi/VIDEO_ID/sddefault.jpg)](https://youtu.be/VIDEO_ID) -->
+[![Fully Wireless Demo](https://img.youtube.com/vi/Pi2ocDLCMOk/sddefault.jpg)](https://youtu.be/Pi2ocDLCMOk)
 
-> 即将发布 — 完全无线配置（Wi-Fi + 无线麦克风）下的完整音频管线演示，零有线连接。
+> 完全无线语音管线：DJI MIC 2 → ASR → 本地 LLM → 机器人执行 — 零有线连接（Wi-Fi + 无线麦克风）。
 
 <details>
 <summary><strong>Go2 动作预览</strong> —— Unitree 官方素材（点击展开）</summary>

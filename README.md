@@ -69,10 +69,9 @@
 
 ### Claudia Fully Wireless Demo
 
-<!-- TODO: Replace VIDEO_ID with actual YouTube video ID when uploaded -->
-<!-- [![Fully Wireless Demo](https://img.youtube.com/vi/VIDEO_ID/sddefault.jpg)](https://youtu.be/VIDEO_ID) -->
+[![Fully Wireless Demo](https://img.youtube.com/vi/Pi2ocDLCMOk/sddefault.jpg)](https://youtu.be/Pi2ocDLCMOk)
 
-> Coming soon — Full audio pipeline demo with completely wireless setup (Wi-Fi + wireless mic), zero wired connections.
+> Fully wireless voice pipeline: DJI MIC 2 → ASR → Local LLM → Robot Action — zero wired connections (Wi-Fi + wireless mic).
 
 <details>
 <summary><strong>Go2 in Action</strong> — official Unitree footage (click to expand)</summary>
