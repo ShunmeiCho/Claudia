@@ -100,6 +100,8 @@ class BrainOutput:
 class ProductionBrain:
     """Production Brain - Using fixed model"""
 
+    MAX_COMMAND_LENGTH = 500  # Japanese commands typically 2-20 chars; 500 is generous
+
     def __init__(self, use_real_hardware: bool = False):
         self.logger = self._setup_logger()
         self.use_real_hardware = use_real_hardware
@@ -204,6 +206,16 @@ class ProductionBrain:
         for kana, kanji in self.KANA_ALIASES.items():
             if kanji in self.hot_cache and kana not in self.hot_cache:
                 self.hot_cache[kana] = self.hot_cache[kanji]
+
+        # Startup validation: ensure all hot_cache api_code values are in EXECUTABLE_API_CODES
+        for _hc_key, _hc_entry in self.hot_cache.items():
+            _hc_api = _hc_entry.get("api_code")
+            if _hc_api is not None and _hc_api not in EXECUTABLE_API_CODES:
+                raise ValueError(
+                    "hot_cache key '{}' has api_code={} not in EXECUTABLE_API_CODES".format(
+                        _hc_key, _hc_api
+                    )
+                )
 
         # Complex sequence detection keywords - extended Japanese conjunctions
         self.sequence_keywords = [
@@ -684,6 +696,15 @@ class ProductionBrain:
           - "failed": Action execution failed
           - "skipped": Text-only response, no action executed
         """
+        # Input length validation (reject excessively long input before any processing)
+        if len(command.strip()) > self.MAX_COMMAND_LENGTH:
+            self.logger.warning("Command too long (%d chars), rejected", len(command.strip()))
+            return BrainOutput(
+                response="コマンドが長すぎます。短くしてください。",
+                api_code=None,
+                execution_status="skipped",
+            )
+
         # contextvars marker: coroutine-safe, no concurrent cross-talk
         token = _pae_depth.set(_pae_depth.get(0) + 1)
         try:
@@ -1687,10 +1708,11 @@ class ProductionBrain:
             return await self._execute_mock(brain_output)
 
     async def _execute_mock(self, brain_output: BrainOutput) -> bool:
-        """Mock execution"""
+        """Mock execution (mirrors _execute_real posture tracking)"""
         if brain_output.api_code:
             self.logger.info(f"🎭 [Sim] API execution: {brain_output.api_code}")
             await asyncio.sleep(0.5)
+            self._update_posture_tracking(brain_output.api_code)
             return True
 
         if brain_output.sequence:
@@ -1698,6 +1720,7 @@ class ProductionBrain:
             for api in brain_output.sequence:
                 self.logger.info(f"   → API: {api}")
                 await asyncio.sleep(0.3)
+                self._update_posture_tracking(api)
             return True
 
         return False

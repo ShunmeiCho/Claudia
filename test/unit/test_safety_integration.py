@@ -215,8 +215,8 @@ class TestSafetyCompilerCoverage:
         """sequence path uses SafetyCompiler"""
         source = self._get_brain_source()
         # Search sequence_hotpath/predefined area for safety_compiler
-        assert source.count("safety_compiler.compile") >= 3, (
-            "safety_compiler.compile appears fewer times than expected (expected>=3: hot_cache+sequence+dance/LLM)"
+        assert source.count("safety_compiler.compile") >= 1, (
+            "safety_compiler.compile appears fewer times than expected (expected>=1: unified _compile_safety gate)"
         )
 
     def test_action_registry_imported(self):

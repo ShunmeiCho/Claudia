@@ -43,7 +43,7 @@ class TestInputContract:
         sc = make_compiler()
         v = sc.compile([1004], battery_level=None, is_standing=True)
         assert v.is_blocked
-        assert "缺失" in v.block_reason
+        assert "missing" in v.block_reason.lower()
 
     def test_battery_string_blocked(self):
         """battery_level='high' -> is_blocked"""
@@ -107,7 +107,7 @@ class TestSnapshotFreshness:
         assert 1004 in v.executable_sequence
         # 1016 is not in SAFE_ACTIONS, should be filtered out
         assert 1016 not in v.executable_sequence
-        assert any("過期" in w or "过期" in w for w in v.warnings)
+        assert any("expired" in w.lower() or "Expired" in w for w in v.warnings)
 
     def test_stale_snapshot_all_unsafe_blocked(self):
         """Stale snapshot + all non-safe actions -> is_blocked"""
@@ -116,7 +116,7 @@ class TestSnapshotFreshness:
         v = sc.compile([1016], battery_level=0.80, is_standing=True,
                         snapshot_timestamp=ts)
         assert v.is_blocked
-        assert "過期" in v.block_reason or "过期" in v.block_reason
+        assert "expired" in v.block_reason.lower() or "Expired" in v.block_reason
 
     def test_no_timestamp_skips_check(self):
         """snapshot_timestamp=None -> skip freshness check"""
@@ -145,7 +145,7 @@ class TestWhitelist:
         v = sc.compile([9999], battery_level=0.80, is_standing=True)
         assert v.is_blocked
         assert 9999 in v.rejected
-        assert "首動作" in v.block_reason or "首动作" in v.block_reason
+        assert "illegal" in v.block_reason.lower() or "First action" in v.block_reason
 
     def test_invalid_mid_action_truncated(self):
         """Invalid action mid-sequence -> truncated, keeping passed portion"""
@@ -190,7 +190,7 @@ class TestHighRiskGate:
         v = sc.compile([1030], battery_level=0.80, is_standing=True)
         assert v.is_blocked
         assert 1030 in v.rejected
-        assert "高リスク" in v.block_reason
+        assert "high-risk" in v.block_reason.lower() or "disabled" in v.block_reason.lower() or "High-risk" in v.block_reason
 
     def test_high_risk_allowed_when_enabled(self):
         """allow_high_risk=True -> FrontFlip(1030) passes"""
@@ -235,7 +235,7 @@ class TestBatteryGate:
         sc = make_compiler()
         v = sc.compile([1016], battery_level=0.08, is_standing=True)
         assert v.is_blocked
-        assert "電量" in v.block_reason or "电量" in v.block_reason
+        assert "battery" in v.block_reason.lower() or "insufficient" in v.block_reason.lower()
 
     def test_critical_battery_dance_blocked(self):
         """battery=0.05, Dance1(1022) -> rejected"""
@@ -267,7 +267,7 @@ class TestBatteryGate:
         assert not v.is_blocked
         assert 1023 in v.executable_sequence  # downgrade_target
         assert 1030 not in v.executable_sequence
-        assert any("降級" in w or "降级" in w for w in v.warnings)
+        assert any("downgraded" in w.lower() or "Downgraded" in w for w in v.warnings)
 
     def test_custom_downgrade_target(self):
         """Custom downgrade target: 1022(Dance1)"""

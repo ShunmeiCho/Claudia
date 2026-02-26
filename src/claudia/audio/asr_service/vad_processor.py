@@ -17,6 +17,7 @@ Dependencies:
 
 import enum
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -150,6 +151,10 @@ class VADProcessor:
         self._config = config or VADConfig()
         self._mock = mock
 
+        # Thread safety: process_frame() runs in executor thread pool,
+        # reset() runs from event loop. Lock protects all shared state.
+        self._state_lock = threading.Lock()
+
         # State machine
         self._state = VADState.SILENCE
         self._speech_start_ms: float = 0.0    # Speech start monotonic time (ms)
@@ -231,65 +236,67 @@ class VADProcessor:
             Events produced by this frame (may be empty)
         """
         frame_ms = len(frame) // BYTES_PER_MS
+        # Speech detection does not access shared state — run outside lock
         is_speech = self._detect_speech(frame)
         now_ms = time.monotonic() * 1000
 
         events: List[VADEvent] = []
 
-        if self._state == VADState.SILENCE:
-            if is_speech:
-                self._transition_to_speech_start(now_ms)
-                self._speech_audio_chunks = []
-                # Include pre-speech buffer
-                pre_audio = self._ring.read_last(self._config.pre_speech_buffer_ms)
-                if pre_audio:
-                    self._speech_audio_chunks.append(pre_audio)
+        with self._state_lock:
+            if self._state == VADState.SILENCE:
+                if is_speech:
+                    self._transition_to_speech_start(now_ms)
+                    self._speech_audio_chunks = []
+                    # Include pre-speech buffer
+                    pre_audio = self._ring.read_last(self._config.pre_speech_buffer_ms)
+                    if pre_audio:
+                        self._speech_audio_chunks.append(pre_audio)
+                    self._speech_audio_chunks.append(frame)
+                    self._current_utterance_id = self._id_gen.next_id()
+                    events.append(VADEvent(
+                        event_type="vad_start",
+                        utterance_id=self._current_utterance_id,
+                    ))
+
+            elif self._state in (VADState.SPEECH_START, VADState.SPEECH_CONTINUE):
                 self._speech_audio_chunks.append(frame)
-                self._current_utterance_id = self._id_gen.next_id()
-                events.append(VADEvent(
-                    event_type="vad_start",
-                    utterance_id=self._current_utterance_id,
-                ))
+                self._accumulated_ms += frame_ms
 
-        elif self._state in (VADState.SPEECH_START, VADState.SPEECH_CONTINUE):
-            self._speech_audio_chunks.append(frame)
-            self._accumulated_ms += frame_ms
+                if is_speech:
+                    self._silence_start_ms = 0.0
+                    if self._state == VADState.SPEECH_START:
+                        self._state = VADState.SPEECH_CONTINUE
 
-            if is_speech:
-                self._silence_start_ms = 0.0
-                if self._state == VADState.SPEECH_START:
-                    self._state = VADState.SPEECH_CONTINUE
+                    # Emergency fast detector: triggers once at 300ms
+                    if (self._accumulated_ms >= self._config.emergency_check_ms
+                            and not self._emergency_checked):
+                        emergency_events = self._run_emergency_check()
+                        events.extend(emergency_events)
+                        self._emergency_checked = True
 
-                # Emergency fast detector: triggers once at 300ms
-                if (self._accumulated_ms >= self._config.emergency_check_ms
-                        and not self._emergency_checked):
-                    emergency_events = self._run_emergency_check()
-                    events.extend(emergency_events)
-                    self._emergency_checked = True
+                    # Maximum speech duration protection
+                    if self._accumulated_ms >= self._config.max_speech_ms:
+                        events.extend(self._end_speech(now_ms, forced=True))
 
-                # Maximum speech duration protection
-                if self._accumulated_ms >= self._config.max_speech_ms:
-                    events.extend(self._end_speech(now_ms, forced=True))
+                else:
+                    # Silence frame
+                    if self._silence_start_ms == 0.0:
+                        self._silence_start_ms = now_ms
 
-            else:
-                # Silence frame
-                if self._silence_start_ms == 0.0:
-                    self._silence_start_ms = now_ms
-
-                silence_duration = now_ms - self._silence_start_ms
-                if silence_duration >= self._config.silence_padding_ms:
-                    # Silence exceeded threshold, speech segment ended
-                    if self._accumulated_ms >= self._config.min_speech_ms:
-                        events.extend(self._end_speech(now_ms, forced=False))
-                    else:
-                        # Too short, discard (likely noise)
-                        logger.info(
-                            "Short utterance discarded: %dms < %dms (utt=%s)",
-                            self._accumulated_ms,
-                            self._config.min_speech_ms,
-                            self._current_utterance_id,
-                        )
-                        self._reset_state()
+                    silence_duration = now_ms - self._silence_start_ms
+                    if silence_duration >= self._config.silence_padding_ms:
+                        # Silence exceeded threshold, speech segment ended
+                        if self._accumulated_ms >= self._config.min_speech_ms:
+                            events.extend(self._end_speech(now_ms, forced=False))
+                        else:
+                            # Too short, discard (likely noise)
+                            logger.info(
+                                "Short utterance discarded: %dms < %dms (utt=%s)",
+                                self._accumulated_ms,
+                                self._config.min_speech_ms,
+                                self._current_utterance_id,
+                            )
+                            self._reset_state()
 
         return events
 
@@ -451,19 +458,22 @@ class VADProcessor:
     @property
     def state(self) -> VADState:
         """Current VAD state"""
-        return self._state
+        with self._state_lock:
+            return self._state
 
     @property
     def is_speaking(self) -> bool:
         """Whether currently in a speech segment"""
-        return self._state in (VADState.SPEECH_START, VADState.SPEECH_CONTINUE)
+        with self._state_lock:
+            return self._state in (VADState.SPEECH_START, VADState.SPEECH_CONTINUE)
 
     def reset(self) -> None:
         """External forced reset (e.g., when TTS echo gate is enabled)"""
-        if self._state != VADState.SILENCE:
-            logger.info("VAD external reset (current state: %s)", self._state.value)
-        self._reset_state()
-        # Reset silero-vad internal state
+        with self._state_lock:
+            if self._state != VADState.SILENCE:
+                logger.info("VAD external reset (current state: %s)", self._state.value)
+            self._reset_state()
+        # Reset silero-vad internal state (outside lock — model reset is independent)
         if self._vad_model is not None:
             try:
                 self._vad_model.reset_states()

@@ -95,12 +95,17 @@ class TestRunner:
         """Run a single test file"""
         try:
             cmd = [sys.executable, str(test_path)]
+            # Propagate src/ in PYTHONPATH so subprocess can import claudia modules
+            env = os.environ.copy()
+            src_dir = str(self.project_root / "src")
+            existing = env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = src_dir + (":" + existing if existing else "")
             if verbose:
                 result = subprocess.run(cmd, cwd=self.project_root,
-                                      capture_output=False, text=True)
+                                      env=env, capture_output=False, text=True)
             else:
                 result = subprocess.run(cmd, cwd=self.project_root,
-                                      capture_output=True, text=True)
+                                      env=env, capture_output=True, text=True)
 
             return result.returncode == 0
 

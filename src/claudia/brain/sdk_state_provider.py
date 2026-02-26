@@ -136,8 +136,8 @@ class SDKStateProvider:
                 # power_v: float voltage
                 if hasattr(msg, 'power_v'):
                     self._battery_voltage = float(msg.power_v)
-        except Exception:
-            pass  # Do not raise exceptions in callbacks
+        except Exception as e:
+            self.logger.debug("LowState callback error: %s", e)
 
     def _make_conservative_fallback(self):
         # type: () -> SDKStateSnapshot

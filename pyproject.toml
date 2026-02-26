@@ -9,51 +9,19 @@ readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.8"
 dependencies = [
-    # Core dependencies
+    # Core: array operations for audio processing (pcm_utils, vad_processor) and LED control
     "numpy>=1.21.0",
+    # Core: LED visual effects in unified_led_controller
     "opencv-python>=4.5.0",
-    "pillow>=8.0.0",
-    
     # Note: ROS2 dependencies (rclpy, sensor_msgs, etc.) are installed via apt
-    # and should not be listed as pip dependencies
-    
-    # Audio processing
-    "pyaudio>=0.2.11",
-    "librosa>=0.9.0",
-    "soundfile>=0.10.0",
-
-    # Communication and networking
-    "websockets>=10.0",
-    
-    # FastAPI and API service dependencies
-    "fastapi>=0.104.0",
-    "uvicorn[standard]>=0.24.0",
-    "pydantic>=2.5.0",
-    "aiofiles>=23.0.0",
-    "python-multipart>=0.0.6",  # For form data handling
-    "sse-starlette>=1.6.0",  # For Server-Sent Events
-    
-    # Caching and performance
-    "cachetools>=5.3.0",
-    "aiocache>=0.12.0",
-    
-    # Monitoring and observability  
-    "prometheus-client>=0.19.0",
-    
-    # HTTP client
-    "httpx>=0.25.0",
-    
-    # Utilities
-    "pyyaml>=5.4.0",
-    "dataclasses-json>=0.5.0",
-    "python-dotenv>=0.19.0",
-    "click>=8.0.0",
+    # Note: Audio capture uses arecord subprocess, not PyAudio
+    # Note: ASR uses faster-whisper (installed separately with ONNX pinning for Jetson)
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.0.0",
-    "pytest-asyncio>=0.21.0",
+    # Note: Jetson system pytest is 4.6.9 (from ROS2 Foxy); pytest>=7 breaks ROS2 plugins
+    "pytest>=4.6",
     "black>=22.0.0",
     "flake8>=4.0.0",
     "mypy>=0.950",

@@ -13,6 +13,9 @@ import sys
 import unittest
 from unittest.mock import MagicMock
 
+# Ensure src/ is in sys.path for direct execution (subprocess via run_tests.py)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
+
 # Mock heavy dependencies before importing ProductionBrain to avoid OOM
 # conftest.py performs the same mocking, but conftest may not load first when running directly
 for _mod in [

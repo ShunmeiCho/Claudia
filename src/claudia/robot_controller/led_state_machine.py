@@ -51,6 +51,10 @@ class LEDStateRequest:
     auto_revert: bool = True              # Whether to auto-revert to previous state
     interrupt_lower: bool = True          # Whether it can interrupt lower priority states
 
+    def __lt__(self, other):
+        """Comparison for PriorityQueue tiebreaking when priority and timestamp are equal"""
+        return self.timestamp < other.timestamp
+
 @dataclass
 class LEDStateHistory:
     """LED state history record"""

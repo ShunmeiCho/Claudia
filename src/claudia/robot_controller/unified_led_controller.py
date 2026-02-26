@@ -15,9 +15,15 @@ import sys
 import time
 import threading
 import logging
-import cv2
-import numpy as np
 from typing import Tuple, Optional, List, Dict, Any, Union
+
+# cv2/numpy: optional for environments where OpenCV is not installed
+try:
+    import cv2
+    import numpy as np
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
