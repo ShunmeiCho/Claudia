@@ -50,6 +50,7 @@ class SDKStateSnapshot:
     current_gait: str = "unknown"
     network_status: str = "connected"
     sdk_connection: bool = True
+    _mono_ts: float = 0.0  # Monotonic timestamp for cache freshness (not affected by NTP jumps)
 
 
 class SDKStateProvider:
@@ -151,6 +152,7 @@ class SDKStateProvider:
             timestamp=time.time(),
             source="sdk_fallback",
             confidence=0.3,
+            _mono_ts=time.monotonic(),
         )
 
     def query_state(self):
@@ -160,7 +162,7 @@ class SDKStateProvider:
         Gets posture via SportClient.GetState(GETSTATE_FULL_KEYS),
         gets battery via LowState DDS subscription.
         """
-        snapshot = SDKStateSnapshot(timestamp=time.time())
+        snapshot = SDKStateSnapshot(timestamp=time.time(), _mono_ts=time.monotonic())
         state_ok = False
         battery_ok = False
 
@@ -227,7 +229,7 @@ class SDKStateProvider:
         # Update cache
         with self._lock:
             self._cached_state = snapshot
-            self._last_success_time = time.time()
+            self._last_success_time = time.monotonic()
             self._consecutive_failures = 0
 
         return snapshot
@@ -239,7 +241,7 @@ class SDKStateProvider:
 
         # Cache expired (>10s) and no background polling -> trigger one query
         _polling_active = self._poll_thread is not None and self._poll_thread.is_alive()
-        if time.time() - cached.timestamp > 10.0 and not _polling_active:
+        if time.monotonic() - cached._mono_ts > 10.0 and not _polling_active:
             return self.query_state()
 
         return cached

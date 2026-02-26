@@ -147,6 +147,13 @@ class ChannelRouter:
         api_code = result.get("api_code") or result.get("a")
         sequence = result.get("sequence") or result.get("s")
 
+        # Normalize api_code to int (LLM may return string)
+        if api_code is not None and not isinstance(api_code, int):
+            try:
+                api_code = int(api_code)
+            except (ValueError, TypeError):
+                api_code = None
+
         return RouterResult(
             api_code=api_code,
             sequence=sequence,
@@ -227,6 +234,13 @@ class ChannelRouter:
 
         api_code = raw.get("a")
         sequence = raw.get("s")
+
+        # Normalize api_code to int (LLM may return string)
+        if api_code is not None and not isinstance(api_code, int):
+            try:
+                api_code = int(api_code)
+            except (ValueError, TypeError):
+                api_code = None
 
         # --- Fix: Normalize when both a+s are present ---
         # s is more specific (sequence action), takes priority over a; clear a to prevent

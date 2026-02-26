@@ -1225,10 +1225,11 @@ class ProductionBrain:
                    action_latency_ms=None, voice_latency_ms=None):
         # type: (str, BrainOutput, str, float, bool, str, Optional[Any], Optional[str], str, Optional[str], Optional[str], Optional[str], Optional[Dict], Optional[float], Optional[float]) -> None
         """Record complete audit log (route must use audit_routes.py constants)"""
-        assert route in ALL_ROUTES, (
-            "Illegal route='{}', must use constants from audit_routes.py. "
-            "Valid values: {}".format(route, ALL_ROUTES)
-        )
+        if route not in ALL_ROUTES:
+            raise ValueError(
+                "Illegal route='{}', must use constants from audit_routes.py. "
+                "Valid values: {}".format(route, ALL_ROUTES)
+            )
         if not self.audit_logger:
             return
 

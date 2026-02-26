@@ -364,7 +364,7 @@ class LEDStateMachine:
         # State management
         self.current_state = ClaudiaLEDMode.OFF
         self.current_priority = 1
-        self.state_lock = threading.Lock()
+        self.state_lock = threading.RLock()
 
         # Request queue and processing
         self.request_queue = queue.PriorityQueue()
