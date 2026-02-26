@@ -72,6 +72,7 @@
 | **Hero Demo** | End-to-end: Japanese commands → LLM semantic understanding → robot action | Done |
 | **Voice Pipeline** | USB mic → ASR → LLM → SafetyCompiler → execution chain | Done |
 | **Terminal Control** | Interactive launcher → keyboard mode → text commands → robot action | Done |
+| **Multilingual** | Whisper language switching + Qwen2.5-7B cross-lingual command understanding | Planned |
 | **Safety System** | Battery gating, standing prerequisites, emergency stop | Planned |
 | **Action Showcase** | All 18 performance actions in quick-cut montage | Planned |
 
@@ -99,9 +100,9 @@
 - **Graceful Fallback**: Real hardware → Mock simulation, with structured error codes
 
 ### Multilingual Interaction
-- **Japanese-Primary**: Natural Japanese conversation with the robot
-- **Chinese Support**: Full Chinese command recognition
-- **English Compatible**: Core English commands supported
+- **Japanese-Primary**: Optimized for natural Japanese conversation (hot cache, response validation, ASR)
+- **Multilingual-Ready Architecture**: Qwen2.5-7B natively understands Japanese, Chinese, and English
+- **Language Switching via ASR**: Whisper language parameter configurable per session
 - **ASR Kana Normalization**: Built-in KANA_ALIASES pipeline for speech recognition output cleanup
 
 ---
