@@ -28,6 +28,13 @@
 > Voice → ASR → Local LLM → Robot Action — fully on-device, zero cloud dependency.
 > Commands shown: Stand up / Sit / Lie down (Japanese voice input on Unitree Go2)
 
+### Claudia Terminal Control
+
+[![Terminal Demo](https://img.youtube.com/vi/gdyy1p4hkY4/sddefault.jpg)](https://youtu.be/gdyy1p4hkY4)
+
+> Interactive launcher → Keyboard mode → Japanese text commands → Robot Action.
+> Commands shown: Stand up (立って) / Sit (座って) / Lie down (伏せて) / Hello (挨拶して)
+
 ### Go2 in Action
 
 <p align="center">
