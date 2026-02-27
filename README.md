@@ -4,13 +4,46 @@
   <a href="README.zh.md">中文</a>
 </p>
 
-<p align="center">
-  <img src="docs/images/cover.jpg" alt="Claudia — Unitree Go2 with LLM Brain" width="800">
-  <br>
-  <sub>Image credit: <a href="https://www.unitree.com/go2">Unitree Robotics</a></sub>
-</p>
-
 # Claudia — LLM-Brained Robot Intelligence
+
+```mermaid
+block-beta
+  columns 5
+
+  block:input:1
+    columns 1
+    JA["🎙 Japanese"]
+    ZH["🎙 Chinese"]
+    EN["🎙 English"]
+  end
+
+  space
+
+  block:brain:1
+    columns 1
+    ASR["ASR\nfaster-whisper"]
+    LLM["LLM Brain\nQwen2.5-7B"]
+    SC["SafetyCompiler"]
+  end
+
+  space
+
+  block:hw:1
+    columns 1
+    Jetson["NVIDIA\nJetson Orin NX"]
+    DDS["CycloneDDS\nROS2 Foxy"]
+    Go2["Unitree Go2\n12-DOF"]
+  end
+
+  input --> brain
+  brain --> hw
+
+  style input fill:#4a90d9,color:#fff
+  style brain fill:#7b68ee,color:#fff
+  style hw fill:#2ecc71,color:#fff
+```
+
+> *"The LLM is the robot's brain"* — On-device semantic understanding via local inference on Jetson Orin NX.
 
 [![Python 3.8+](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Jetson%20Orin%20NX-green.svg)](https://developer.nvidia.com/embedded/jetson-orin)
@@ -72,33 +105,6 @@
 [![Fully Wireless Demo](https://img.youtube.com/vi/Pi2ocDLCMOk/sddefault.jpg)](https://youtu.be/Pi2ocDLCMOk)
 
 > Fully wireless voice pipeline: DJI MIC 2 → ASR → Local LLM → Robot Action — zero wired connections (Wi-Fi + wireless mic).
-
-<details>
-<summary><strong>Go2 in Action</strong> — official Unitree footage (click to expand)</summary>
-<br>
-<p align="center">
-  <a href="https://youtu.be/8gaULsglOQE"><img src="docs/images/go2-dance.gif" alt="Dance" width="260"></a>
-  <a href="https://youtu.be/DXRojz4N8K8"><img src="docs/images/go2-flip.gif" alt="Flip" width="260"></a>
-  <a href="https://youtu.be/8ReuPIKcydw"><img src="docs/images/go2-run.gif" alt="Run" width="260"></a>
-</p>
-<p align="center">
-  <a href="https://youtu.be/F1JtFksc_k0"><img src="docs/images/go2-avoid.gif" alt="Obstacle Avoidance" width="260"></a>
-  <a href="https://youtu.be/rjVfRanqUC4"><img src="docs/images/go2-lidar.gif" alt="4D LiDAR" width="260"></a>
-</p>
-
-| Video | Link |
-|-------|------|
-| Dance Performance | [YouTube](https://youtu.be/8gaULsglOQE) |
-| Front Flip & Acrobatics | [YouTube](https://youtu.be/DXRojz4N8K8) |
-| High-Speed Running | [YouTube](https://youtu.be/8ReuPIKcydw) |
-| Obstacle Avoidance | [YouTube](https://youtu.be/F1JtFksc_k0) |
-| 4D LiDAR Mapping | [YouTube](https://youtu.be/rjVfRanqUC4) |
-| Performance Overview | [YouTube](https://youtu.be/N6burwXML70) |
-| Battery & Endurance | [YouTube](https://youtu.be/klw6Hvu4EzI) |
-| Mobile App Control | [YouTube](https://youtu.be/IM2MKeuHtu4) |
-
-<sub>All footage from <a href="https://www.unitree.com/go2">Unitree Robotics official website</a>. Used for educational/research demonstration purposes.</sub>
-</details>
 
 ---
 
@@ -288,12 +294,6 @@ Claudia> 量子力学について教えて → Conversational response (no actio
 ## Architecture
 
 ### Hardware Platform
-
-<p align="center">
-  <img src="docs/images/go2-hardware.jpg" alt="Unitree Go2 Hardware Overview" width="800">
-  <br>
-  <sub>Image credit: <a href="https://www.unitree.com/go2">Unitree Robotics</a></sub>
-</p>
 
 Claudia runs on a **Unitree Go2** quadruped robot with an external **NVIDIA Jetson Orin NX** as the AI compute module:
 

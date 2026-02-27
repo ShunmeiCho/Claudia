@@ -4,13 +4,46 @@
   <strong>中文</strong>
 </p>
 
-<p align="center">
-  <img src="docs/images/cover.jpg" alt="Claudia — Unitree Go2 LLM 大脑机器人" width="800">
-  <br>
-  <sub>图片来源: <a href="https://www.unitree.com/go2">Unitree Robotics</a></sub>
-</p>
-
 # Claudia — LLM 大脑机器人智能
+
+```mermaid
+block-beta
+  columns 5
+
+  block:input:1
+    columns 1
+    JA["🎙 日语"]
+    ZH["🎙 中文"]
+    EN["🎙 英语"]
+  end
+
+  space
+
+  block:brain:1
+    columns 1
+    ASR["ASR\nfaster-whisper"]
+    LLM["LLM 大脑\nQwen2.5-7B"]
+    SC["SafetyCompiler"]
+  end
+
+  space
+
+  block:hw:1
+    columns 1
+    Jetson["NVIDIA\nJetson Orin NX"]
+    DDS["CycloneDDS\nROS2 Foxy"]
+    Go2["Unitree Go2\n12自由度"]
+  end
+
+  input --> brain
+  brain --> hw
+
+  style input fill:#4a90d9,color:#fff
+  style brain fill:#7b68ee,color:#fff
+  style hw fill:#2ecc71,color:#fff
+```
+
+> *"LLM 就是机器人的大脑"* —— Jetson Orin NX 上的本地推理，实现设备端语义理解。
 
 [![Python 3.8+](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Jetson%20Orin%20NX-green.svg)](https://developer.nvidia.com/embedded/jetson-orin)
@@ -72,33 +105,6 @@
 [![Fully Wireless Demo](https://img.youtube.com/vi/Pi2ocDLCMOk/sddefault.jpg)](https://youtu.be/Pi2ocDLCMOk)
 
 > 完全无线语音管线：DJI MIC 2 → ASR → 本地 LLM → 机器人执行 — 零有线连接（Wi-Fi + 无线麦克风）。
-
-<details>
-<summary><strong>Go2 动作预览</strong> —— Unitree 官方素材（点击展开）</summary>
-<br>
-<p align="center">
-  <a href="https://youtu.be/8gaULsglOQE"><img src="docs/images/go2-dance.gif" alt="舞蹈" width="260"></a>
-  <a href="https://youtu.be/DXRojz4N8K8"><img src="docs/images/go2-flip.gif" alt="空翻" width="260"></a>
-  <a href="https://youtu.be/8ReuPIKcydw"><img src="docs/images/go2-run.gif" alt="奔跑" width="260"></a>
-</p>
-<p align="center">
-  <a href="https://youtu.be/F1JtFksc_k0"><img src="docs/images/go2-avoid.gif" alt="障碍回避" width="260"></a>
-  <a href="https://youtu.be/rjVfRanqUC4"><img src="docs/images/go2-lidar.gif" alt="4D LiDAR" width="260"></a>
-</p>
-
-| 视频 | 链接 |
-|------|------|
-| 舞蹈表演 | [YouTube](https://youtu.be/8gaULsglOQE) |
-| 前空翻 | [YouTube](https://youtu.be/DXRojz4N8K8) |
-| 高速奔跑 | [YouTube](https://youtu.be/8ReuPIKcydw) |
-| 障碍回避 | [YouTube](https://youtu.be/F1JtFksc_k0) |
-| 4D LiDAR 建图 | [YouTube](https://youtu.be/rjVfRanqUC4) |
-| 性能总览 | [YouTube](https://youtu.be/N6burwXML70) |
-| 续航测试 | [YouTube](https://youtu.be/klw6Hvu4EzI) |
-| 手机 APP 控制 | [YouTube](https://youtu.be/IM2MKeuHtu4) |
-
-<sub>全部影像来自 <a href="https://www.unitree.com/go2">Unitree Robotics 官网</a>，仅用于教育/研究演示目的。</sub>
-</details>
 
 ---
 
@@ -288,12 +294,6 @@ Claudia> 量子力学について教えて → 对话回复（无动作）
 ## 架构
 
 ### 硬件平台
-
-<p align="center">
-  <img src="docs/images/go2-hardware.jpg" alt="Unitree Go2 硬件构造" width="800">
-  <br>
-  <sub>图片来源: <a href="https://www.unitree.com/go2">Unitree Robotics</a></sub>
-</p>
 
 Claudia 运行在 **Unitree Go2** 四足机器人上，外接 **NVIDIA Jetson Orin NX** 作为 AI 计算模块：
 
